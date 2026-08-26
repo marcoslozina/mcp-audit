@@ -58,6 +58,11 @@ class ServerSnapshot:
     tools: list[ToolInfo] = field(default_factory=list)
     resources: list[ResourceInfo] = field(default_factory=list)
     prompts: list[PromptInfo] = field(default_factory=list)
+    # Transport used to obtain this snapshot. Only "stdio" is supported
+    # today; kept explicit (rather than assumed) so downstream checks that
+    # care about transport security (TLS, auth) can key off it honestly
+    # once HTTP/SSE support lands instead of silently assuming stdio.
+    transport: str = "stdio"
 
 
 async def inspect_server(command: str, args: list[str] | None = None) -> ServerSnapshot:
@@ -125,6 +130,7 @@ async def inspect_server(command: str, args: list[str] | None = None) -> ServerS
                 tools=tools,
                 resources=resources,
                 prompts=prompts,
+                transport="stdio",
             )
 
 
