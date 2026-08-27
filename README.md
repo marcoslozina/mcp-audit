@@ -310,6 +310,31 @@ start command. It covers:
   check has something to compare against instead of starting fresh every
   build.
 
+## Add a security badge to your repo
+
+If your server scans clean, `mcp-audit badge` turns that into a shields.io
+status badge for your own README — the same "self-reported, verified by
+your own CI" trust model as any build-passing badge, no `mcp-audit`
+infrastructure involved:
+
+```bash
+uv run mcp-audit badge -- python path/to/target_server.py
+# {"schemaVersion": 1, "label": "mcp-audit", "message": "passing", "color": "brightgreen"}
+```
+
+It accepts the same options as `scan` (`--source-dir`, `--server-id`,
+`--update-baseline`) and exits `1` on any critical/high finding, so it can
+also be used as a CI gate on its own. The difference from `scan` is the
+output: one line of shields.io ["endpoint
+badge"](https://shields.io/badges/endpoint-badge) JSON instead of a full
+report.
+
+We don't host anything for this — you publish that JSON to a GitHub Gist
+you control, and shields.io fetches it from there. A complete, commented
+GitHub Actions workflow covering the one-time Gist/token setup and the
+exact badge Markdown to paste is at
+[`examples/github-actions/mcp-audit-badge.yml`](examples/github-actions/mcp-audit-badge.yml).
+
 ## Roadmap
 
 - HTTP/SSE transport support (unlocks the transport-security check for real)
@@ -363,3 +388,7 @@ would be.
 ## License
 
 [MIT](LICENSE).
+
+## Built by
+
+[Marcos Lozina](https://github.com/marcoslozina) ([LinkedIn](https://linkedin.com/in/marcoslozina)) — a solo-founder project, built in spare time because this gap in MCP tooling seemed worth closing. Issues, PRs, and honest feedback are how it gets better.
