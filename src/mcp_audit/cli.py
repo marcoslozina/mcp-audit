@@ -1,11 +1,15 @@
 """mcp-audit command-line interface.
 
-Exposes two commands:
+Exposes three commands:
   - `inspect`: connects to a target MCP server over stdio and prints the
     tools/resources/prompts it exposes (parsing foundation, no checks).
   - `scan`: runs all security checks against a target server and prints a
     report, human-readable (default, via `rich`) or machine-readable
     (`--format json`, for CI/CD gating).
+  - `badge`: runs the exact same scan as `scan`, but instead of a full
+    report prints a shields.io "endpoint badge" JSON payload to stdout —
+    meant to be published somewhere shields.io can fetch it (e.g. a GitHub
+    Gist) so a server author can drop a status badge in their own README.
 """
 
 from __future__ import annotations
@@ -214,26 +218,109 @@ def _build_error_report(message: str) -> dict:
     }
 
 
+def _run_scan_report(
+    command: str,
+    args: list[str],
+    source_dir: Path | None,
+    server_id: str | None,
+    update_baseline: bool,
+) -> dict:
+    """Connect to the target server, run every check, and return the report.
+
+    This is the one place that does the actual "scan" work — both the
+    `scan` and `badge` commands call this instead of duplicating it, so
+    there's a single source of truth for what a scan does. The only
+    difference between the two commands is what they do with the returned
+    report (print it in full vs. reduce it to a badge payload).
+
+    On a handshake/connection failure (target command not found, protocol
+    mismatch, etc.) this returns an error-shaped report (see
+    `_build_error_report`, identifiable by an `"error"` key) instead of
+    raising — callers decide how to present that failure.
+    """
+    try:
+        snapshot = inspect_server_sync(command, args)
+    except FileNotFoundError:
+        return _build_error_report(f"command not found: {command}")
+    except Exception as exc:  # noqa: BLE001 - surface any handshake/transport failure to the caller
+        return _build_error_report(f"failed to inspect server: {exc}")
+
+    resolved_server_id = server_id or compute_default_server_id(command, args)
+
+    rug_pull_check = RugPullCheck(server_id=resolved_server_id, update_baseline=update_baseline)
+    checks_to_run: list = [*ALL_CHECKS, rug_pull_check]
+
+    outcomes: list[CheckOutcome] = [check.run(snapshot, source_dir=source_dir) for check in checks_to_run]
+    return _build_report(snapshot, resolved_server_id, server_id is not None, outcomes)
+
+
 def _print_report_json(report: dict) -> None:
     click.echo(json.dumps(report, indent=2))
 
 
-def _fail_scan(message: str, output_format: str) -> None:
-    """Report a scan-ending error (handshake/transport failure, missing
-    command, etc.) in the format the user asked for, then exit 1.
+def _emit_scan_error(report: dict, output_format: str) -> None:
+    """Print a scan-ending error report (see `_build_error_report`) in the
+    format the user asked for, then exit 1.
 
     `--format json` is meant to be consumed by CI and other tooling — a
     Python traceback or a plain-text stderr line on the exact same failure
     path is a broken contract for that use case, since a JSON parser fails
     on it too. So an error under `--format json` prints structured JSON on
-    stdout (mirroring the shape a successful `_build_report` would use,
-    minus fields that require a snapshot we never got) instead of stderr text.
+    stdout instead of stderr text.
     """
     if output_format == "json":
-        click.echo(json.dumps(_build_error_report(message), indent=2))
+        click.echo(json.dumps(report, indent=2))
     else:
-        click.echo(f"error: {message}", err=True)
-    sys.exit(1)
+        click.echo(f"error: {report['error']}", err=True)
+    sys.exit(report["exit_code"])
+
+
+_BADGE_LABEL = "mcp-audit"
+
+# shields.io's "endpoint badge" schema (https://shields.io/badges/endpoint-badge)
+# has its own "schemaVersion" field, always 1 today — this is unrelated to
+# mcp-audit's own report "schema_version" (`_SCHEMA_VERSION` above). Don't
+# confuse the two when bumping one or the other.
+_SHIELDS_SCHEMA_VERSION = 1
+
+
+def _build_badge(report: dict) -> dict:
+    """Reduce a scan report (from `_run_scan_report`) to a shields.io
+    endpoint-badge JSON payload: {"schemaVersion", "label", "message", "color"}.
+
+    Design: a handshake/connection failure is surfaced as its own badge
+    state ("error" / red) rather than silently reusing the "critical/high"
+    wording, since a badge reader shouldn't have to guess whether "red"
+    means "we scanned it and it's bad" or "we couldn't even scan it".
+    """
+    if "error" in report:
+        return {
+            "schemaVersion": _SHIELDS_SCHEMA_VERSION,
+            "label": _BADGE_LABEL,
+            "message": "error",
+            "color": "red",
+        }
+
+    summary = report["summary"]
+    gating = summary["critical"] + summary["high"]
+    informational = summary["medium"] + summary["low"]
+
+    if gating:
+        message = f"{gating} critical/high"
+        color = "red"
+    elif informational:
+        message = f"{informational} medium/low"
+        color = "yellow"
+    else:
+        message = "passing"
+        color = "brightgreen"
+
+    return {
+        "schemaVersion": _SHIELDS_SCHEMA_VERSION,
+        "label": _BADGE_LABEL,
+        "message": message,
+        "color": color,
+    }
 
 
 def _print_report_human(report: dict) -> None:
@@ -361,26 +448,85 @@ def scan(
     command, *args = command_parts
     _warn_misplaced_flags(args)
 
-    try:
-        snapshot = inspect_server_sync(command, args)
-    except FileNotFoundError:
-        _fail_scan(f"command not found: {command}", output_format)
-    except Exception as exc:  # noqa: BLE001 - surface any handshake/transport failure to the user
-        _fail_scan(f"failed to inspect server: {exc}", output_format)
+    report = _run_scan_report(command, args, source_dir, server_id, update_baseline)
 
-    resolved_server_id = server_id or compute_default_server_id(command, args)
-
-    rug_pull_check = RugPullCheck(server_id=resolved_server_id, update_baseline=update_baseline)
-    checks_to_run: list = [*ALL_CHECKS, rug_pull_check]
-
-    outcomes: list[CheckOutcome] = [check.run(snapshot, source_dir=source_dir) for check in checks_to_run]
-    report = _build_report(snapshot, resolved_server_id, server_id is not None, outcomes)
+    if "error" in report:
+        _emit_scan_error(report, output_format)
 
     if output_format == "json":
         _print_report_json(report)
     else:
         _print_report_human(report)
 
+    sys.exit(report["exit_code"])
+
+
+@main.command()
+@click.argument("server_command", nargs=-1, required=True)
+@click.option(
+    "--source-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to the target server's source code, to enable the hardcoded-secrets check.",
+)
+@click.option(
+    "--server-id",
+    default=None,
+    help=(
+        "Stable identifier for this server, used as the rug-pull baseline key. "
+        "Defaults to a hash of the launch command if omitted — pass an explicit "
+        "value if you expect the command/args to change across runs of the same server."
+    ),
+)
+@click.option(
+    "--update-baseline",
+    is_flag=True,
+    default=False,
+    help=(
+        "Overwrite the stored rug-pull baseline with this run's snapshot instead "
+        "of comparing against it. Use after confirming a detected change is legitimate."
+    ),
+)
+def badge(
+    server_command: tuple[str, ...],
+    source_dir: Path | None,
+    server_id: str | None,
+    update_baseline: bool,
+) -> None:
+    """Run the same scan as `mcp-audit scan`, but print a shields.io
+    "endpoint badge" JSON payload instead of a full report.
+
+    Pass the command to launch the target server after `--`, exactly like
+    `scan`, e.g.:
+
+        mcp-audit badge -- python examples/toy_server.py
+
+    Intended use: run this in CI, save stdout to a file, and publish that
+    file somewhere shields.io's endpoint badge can fetch it (a GitHub Gist
+    you control is the common zero-infrastructure choice — see
+    examples/github-actions/mcp-audit-badge.yml). Anyone who then embeds
+    that badge in a README is displaying a self-reported result — the same
+    trust model as any other "build passing" badge — not a result verified
+    by a third party.
+
+    IMPORTANT: mcp-audit's own options (--source-dir, --server-id,
+    --update-baseline) must go BEFORE --, exactly as in `scan`.
+
+    Exit code is 1 if any critical/high finding was reported (or if the
+    scan itself failed), 0 otherwise — same semantics as `scan`, so this
+    command can also be used directly as a CI gate if you don't need the
+    full report.
+    """
+    command_parts = list(server_command)
+    if not command_parts:
+        click.echo("error: no server command given", err=True)
+        sys.exit(1)
+
+    command, *args = command_parts
+    _warn_misplaced_flags(args)
+
+    report = _run_scan_report(command, args, source_dir, server_id, update_baseline)
+    click.echo(json.dumps(_build_badge(report)))
     sys.exit(report["exit_code"])
 
 
