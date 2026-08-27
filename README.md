@@ -73,6 +73,110 @@ That description looked like `"Reverse the characters of the given
 text."` in every tool listing. `mcp-audit` is one of the only scanners
 that checks for this class of attack at all.
 
+## Try it against a real MCP server
+
+`examples/toy_server.py` and `examples/evil_server.py` are ours — built to
+demonstrate specific behavior. To show `mcp-audit` isn't just tuned to
+pass against its own fixtures, here it is run against
+[`@modelcontextprotocol/server-everything`](https://github.com/modelcontextprotocol/servers/tree/main/src/everything),
+one of the official reference servers published by the MCP project itself
+under `modelcontextprotocol/servers`. It deliberately exercises the full
+protocol surface (13 tools, 7 resources, 4 prompts) and is launched with a
+single `npx` command — no API keys, no config file, nothing to set up:
+
+```
+$ uv run mcp-audit scan -- npx -y @modelcontextprotocol/server-everything stdio
+
+Starting default (STDIO) server...
+Server: mcp-servers/everything (version 2.0.0)
+Transport: stdio
+Server ID (rug-pull baseline key): cc924702dceb11db (auto-derived from launch
+command; pass --server-id to pin it)
+
+No findings.
+
+                                 Check coverage
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Check                        ┃ Status         ┃ Detail                       ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Unicode tag-block /          │ RAN            │ no findings                  │
+│ invisible-character          │                │                              │
+│ concealment                  │                │                              │
+│ (unicode-concealment)        │                │                              │
+│ Hardcoded secrets in source  │ SKIPPED        │ no --source-dir provided;    │
+│ (secrets-hardcoded)          │                │ mcp-audit cannot inspect the │
+│                              │                │ target server's source code  │
+│                              │                │ from the MCP protocol alone, │
+│                              │                │ so this check was not run.   │
+│                              │                │ Re-run with --source-dir     │
+│                              │                │ <path> to enable it.         │
+│ Insecure transport / missing │ NOT APPLICABLE │ server was inspected over    │
+│ auth (transport-security)    │                │ stdio (local subprocess      │
+│                              │                │ pipes); there is no network  │
+│                              │                │ transport, TLS, or auth      │
+│                              │                │ mechanism to evaluate for    │
+│                              │                │ this connection. This check  │
+│                              │                │ will activate once           │
+│                              │                │ mcp-audit's parser supports  │
+│                              │                │ HTTP/SSE transports.         │
+│ Rug-pull detection (tool     │ RAN            │ no baseline existed for      │
+│ definition drift)            │                │ server-id                    │
+│ (rug-pull-detection)         │                │ 'cc924702dceb11db'; baseline │
+│                              │                │ created at                   │
+│                              │                │ /home/marcos/.mcp-audit/bas… │
+│                              │                │ from this run's snapshot (13 │
+│                              │                │ tool(s)). Nothing to compare │
+│                              │                │ yet — this is the first time │
+│                              │                │ mcp-audit has seen this      │
+│                              │                │ server. Re-run mcp-audit     │
+│                              │                │ scan later against the same  │
+│                              │                │ --server-id to detect drift. │
+└──────────────────────────────┴────────────────┴──────────────────────────────┘
+
+PASS: no critical/high findings (0 medium, 0 low).
+$ echo $?
+0
+```
+
+A clean pass is the point of showing it: `mcp-audit` doesn't manufacture
+findings against a server that isn't doing anything wrong. Run the exact
+same command again and the rug-pull check now has a baseline to compare
+against instead of just creating one:
+
+```
+$ uv run mcp-audit scan -- npx -y @modelcontextprotocol/server-everything stdio
+[...]
+│ Rug-pull detection (tool     │ RAN            │ compared current snapshot    │
+│ definition drift)            │                │ against existing baseline    │
+│ (rug-pull-detection)         │                │ for server-id                │
+│                              │                │ 'cc924702dceb11db' at        │
+│                              │                │ /home/marcos/.mcp-audit/bas… │
+│                              │                │ (13 tool(s) in baseline, 13  │
+│                              │                │ tool(s) now).                │
+└──────────────────────────────┴────────────────┴──────────────────────────────┘
+
+PASS: no critical/high findings (0 medium, 0 low).
+```
+
+We also ran it against
+[`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem)
+(pointed at a scratch directory, not a real one — `-- npx -y
+@modelcontextprotocol/server-filesystem /tmp/some-throwaway-dir`), with
+the same clean-pass result. Two things worth knowing if you try this
+yourself:
+
+- Both servers are launched via `npx`, which prints its own noise to
+  stderr (npm deprecation warnings, the server's own startup logging like
+  `"Client does not support MCP Roots, using allowed directories..."`).
+  `mcp-audit`'s stdio parser only reads the JSON-RPC channel on stdout, so
+  this doesn't interfere — but if a scan ever hangs against an unfamiliar
+  server, check stderr for what the server is actually printing before
+  assuming `mcp-audit` is broken.
+- These reference servers negotiated protocol version `2025-11-25` against
+  our `mcp` SDK dependency (pinned `>=2.1.1`) with no handshake errors —
+  useful confirmation that `mcp-audit` isn't quietly coupled to only the
+  toy servers it ships with.
+
 ## Install
 
 Not published to PyPI yet — this is early-stage. Clone and run from source:
