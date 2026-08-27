@@ -1,5 +1,6 @@
 # Automated test suite for mcp-audit (unit + integration tests via pytest,
-# plus lint via ruff). This is separate from smoke-test.yml on purpose:
+# plus lint via ruff and static type-checking via mypy). This is separate
+# from smoke-test.yml on purpose:
 # smoke-test.yml is a real end-to-end check that the published CLI still
 # behaves correctly against the example servers (and stays valuable even
 # with a full test suite in place); this workflow runs the pytest suite
@@ -35,6 +36,9 @@ jobs:
 
       - name: Run ruff
         run: uvx ruff check .
+
+      - name: Run mypy
+        run: uv run mypy src/
 
       - name: Run pytest
         run: uv run pytest -v
