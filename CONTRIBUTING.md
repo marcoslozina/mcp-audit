@@ -189,6 +189,21 @@ A PR needs all of these green before it's merged. If you touch
 writes the real developer's `~/.mcp-audit/baselines` — see the "Test
 isolation for the rug-pull baseline" note in `AGENTS.md`.
 
+## Versioning and the changelog
+
+`mcp-audit` follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`,
+currently pre-1.0 so breaking changes can still happen on a `0.x` bump) and
+keeps [`CHANGELOG.md`](CHANGELOG.md) in [Keep a Changelog](https://keepachangelog.com/)
+format.
+
+If your PR is a user-visible change (new check, new CLI flag/command,
+behavior change, bug fix), add an entry to `CHANGELOG.md` under the
+`[Unreleased]` section, in the right category (`Added`, `Changed`,
+`Fixed`, `Security`). Pure internal/docs/CI changes with no user-facing
+effect don't need an entry. The maintainer moves `[Unreleased]` into a new
+version section and cuts a tag/release; contributors don't bump the version
+in `pyproject.toml` themselves.
+
 ## Reporting security issues
 
 Found a vulnerability *in* `mcp-audit` itself, rather than a check missing
