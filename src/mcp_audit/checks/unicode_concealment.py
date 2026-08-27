@@ -45,6 +45,7 @@ from you."
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -127,7 +128,7 @@ def _find_tag_runs(text: str) -> list[str]:
     return runs
 
 
-def _iter_texts(snapshot: ServerSnapshot):
+def _iter_texts(snapshot: ServerSnapshot) -> Iterator[_NamedText]:
     for tool in snapshot.tools:
         if tool.description:
             yield _NamedText("tool", tool.name, tool.description)

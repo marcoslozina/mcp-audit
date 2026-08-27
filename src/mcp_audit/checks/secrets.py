@@ -26,10 +26,11 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from mcp_audit.checks.base import Check, CheckOutcome, Finding
+from mcp_audit.checks.base import Check, CheckOutcome, Finding, Severity
 from mcp_audit.parser import ServerSnapshot
 
 CHECK_ID = "secrets-hardcoded"
@@ -44,7 +45,7 @@ _SCAN_SUFFIXES = {
 class _VendorPattern:
     name: str
     regex: re.Pattern[str]
-    severity: str = "critical"
+    severity: Severity = "critical"
 
 
 _VENDOR_PATTERNS: list[_VendorPattern] = [
@@ -90,7 +91,7 @@ def _is_placeholder(value: str) -> bool:
     return bool(_PLACEHOLDER_RE.match(value.strip()))
 
 
-def _iter_source_files(source_dir: Path):
+def _iter_source_files(source_dir: Path) -> Iterator[Path]:
     for path in sorted(source_dir.rglob("*")):
         if not path.is_file():
             continue
