@@ -1,0 +1,44 @@
+# TEMPORARY probe workflow — not part of the final deliverable.
+# Purpose: empirically confirm whether the automatic secrets.GITHUB_TOKEN
+# can read this repo's traffic API (views/clones), or whether it 403s and a
+# PAT is required instead. Deleted after the test run.
+
+name: traffic probe (temp)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Try traffic/views with GITHUB_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Attempting: gh api repos/marcoslozina/mcp-audit/traffic/views"
+          if gh api repos/marcoslozina/mcp-audit/traffic/views --include > out.txt 2>&1; then
+            echo "SUCCESS"
+            cat out.txt
+          else
+            echo "FAILED (see output below)"
+            cat out.txt
+            exit 0
+          fi
+
+      - name: Try traffic/clones with GITHUB_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Attempting: gh api repos/marcoslozina/mcp-audit/traffic/clones"
+          if gh api repos/marcoslozina/mcp-audit/traffic/clones --include > out2.txt 2>&1; then
+            echo "SUCCESS"
+            cat out2.txt
+          else
+            echo "FAILED (see output below)"
+            cat out2.txt
+            exit 0
+          fi
