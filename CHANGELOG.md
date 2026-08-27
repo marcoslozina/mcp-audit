@@ -31,6 +31,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secret (fine-grained PAT, `Administration: Read-only`) — the automatic
   `GITHUB_TOKEN` cannot be granted that permission, confirmed empirically
   (see the workflow file's header comment).
+- `action.yml`: a reusable, composite GitHub Action wrapping `mcp-audit
+  scan --format json`, so consumers can gate a PR with `uses:
+  marcoslozina/mcp-audit@v1` instead of copy-pasting
+  `examples/github-actions/mcp-audit-ci.yml`. Installs Python + `uv`,
+  installs `mcp-audit` from this repo as an isolated `uv tool` (not on
+  PyPI yet), runs the scan against the given `server-command` (plus
+  optional `source-dir`, `server-id`, `update-baseline`), uploads the JSON
+  report as a workflow artifact, and fails the step on `mcp-audit`'s own
+  non-zero exit code. Exposes `report-path`, `exit-code`, and `summary`
+  outputs. Deliberately does not expose a `fail-on-severity` input — the
+  underlying CLI doesn't support tuning the critical/high gate today, and
+  this action doesn't invent behavior it can't back up. Verified against a
+  real GitHub Actions run (not just YAML syntax) via a temporary
+  `uses: ./` workflow: a clean pass against `examples/toy_server.py` and a
+  correctly-failed run (exit 1, Unicode-concealment critical finding)
+  against `examples/evil_server.py`, both confirmed in the Actions log
+  before the workflow was removed and the `v1` tag was cut. See the
+  README's "Use the reusable mcp-audit GitHub Action" section.
 
 ## [0.1.0] - 2026-08-27
 

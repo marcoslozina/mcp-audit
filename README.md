@@ -760,6 +760,52 @@ start command. It covers:
   check has something to compare against instead of starting fresh every
   build.
 
+## Use the reusable mcp-audit GitHub Action
+
+Would rather not copy/paste that workflow at all? This repo also ships
+[`action.yml`](action.yml) at its root — a real, reusable composite GitHub
+Action. Drop one line into your own workflow instead:
+
+```yaml
+- uses: marcoslozina/mcp-audit@v1
+  with:
+    server-command: 'python path/to/your_server.py'
+    # source-dir: '.'        # optional — enables hardcoded-secrets, code-injection,
+                              # path-traversal, and the source-level half of
+                              # overprivileged-scopes/resource-limits
+    # server-id: 'my-server' # optional — stable rug-pull baseline key
+```
+
+It installs Python + `uv`, installs `mcp-audit` from this repo (not on PyPI
+yet, same as above), runs `mcp-audit scan --format json` against your
+`server-command`, uploads the JSON report as a workflow artifact named
+`mcp-audit-report`, and fails the step whenever `mcp-audit` itself exits
+non-zero — the same critical/high gate described above, no extra logic
+needed. It also exposes `report-path`, `exit-code`, and `summary` outputs
+for a later step in your workflow to react to. See `action.yml`'s `inputs:`
+for the full list (`update-baseline`, `report-path`, `python-version`,
+`mcp-audit-ref`).
+
+`v1` is a moving major-version tag — the same convention as
+`actions/checkout@v4` — pointing at the commit this was first verified
+against (confirmed with a real run in this repo's own Actions history: a
+clean pass against `examples/toy_server.py` and a caught, non-zero exit
+against `examples/evil_server.py`, both via `uses: ./` before the tag was
+cut). It'll move forward to backward-compatible fixes, never to a breaking
+change. Pass `mcp-audit-ref: <full commit SHA>` as an extra input if you
+need the installed CLI version fully pinned instead of tracking a branch.
+
+One limitation worth being upfront about: `mcp-audit` doesn't support
+tuning *which* severities fail the build — the gate is always exactly "any
+critical or high finding" (see the exit-code note earlier in this section).
+This action doesn't invent a `fail-on-severity`-style input the underlying
+CLI can't actually honor.
+
+The full example workflow at
+[`examples/github-actions/mcp-audit-ci.yml`](examples/github-actions/mcp-audit-ci.yml)
+is still here and still supported for anyone who'd rather own every step of
+the YAML directly instead of depending on this (or any) reusable Action.
+
 ## Add a security badge to your repo
 
 If your server scans clean, `mcp-audit badge` turns that into a shields.io
@@ -809,7 +855,6 @@ the CLI, which still phones home to nowhere.
 - Integration with the official MCP registry (scan-on-publish / scan-on-list)
 - Hosted dashboard: fleet-wide scanning, scheduled re-scans, Slack/email
   alerting on drift (the paid layer of the open-core model)
-- GitHub Action wrapping `mcp-audit scan --format json` for PR-time gating
 
 ## Requirements
 
