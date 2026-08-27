@@ -185,6 +185,108 @@ yourself:
   useful confirmation that `mcp-audit` isn't quietly coupled to only the
   toy servers it ships with.
 
+## Catching a real finding in a published MCP security-training lab
+
+The two servers above scan clean, which is the right result — they're
+official reference implementations, not deliberately broken. To show
+`mcp-audit` actually catching something, it needs a target that's
+*supposed* to be vulnerable. Scanning an arbitrary third party's
+production MCP server and publishing the result would be irresponsible
+disclosure, so instead we ran it against
+[Damn Vulnerable MCP Server (DVMCP)](https://github.com/harishsg993010/damn-vulnerable-MCP-server)
+— an openly published, MIT-style educational project (1,300+ GitHub
+stars) built specifically for people to practice finding MCP
+vulnerabilities against, the closest thing MCP currently has to DVWA for
+web apps. Nothing here was disclosed to anyone; it's a training target
+built to be scanned.
+
+Two things to know before reproducing this:
+
+- DVMCP's `server.py` files predate the `mcp` Python SDK's v2 rename
+  (`FastMCP` → `MCPServer`) and pin `mcp[cli]>=0.5.0`, so they need their
+  own virtualenv with `mcp<2` installed — don't try to run them inside
+  `mcp-audit`'s own `.venv`, the import will fail with a
+  `ModuleNotFoundError` pointing at the v1→v2 migration guide.
+- Upstream wires each challenge to an HTTP server via `uvicorn` inside
+  `if __name__ == "__main__":`, and `mcp-audit`'s parser only speaks
+  stdio today. `FastMCP` (v1) already supports a stdio transport out of
+  the box, so a 10-line wrapper that imports the *same* app object and
+  calls its own `.run()` (default transport `"stdio"`) launches the
+  identical, unmodified tool definitions over stdio instead — no
+  vulnerability logic touched:
+
+  ```python
+  # run_stdio.py — drop next to the challenge's own server.py
+  import sys
+  from pathlib import Path
+
+  sys.path.insert(0, str(Path(__file__).parent))
+  from server import mcp  # the challenge's own FastMCP app, unmodified
+
+  if __name__ == "__main__":
+      mcp.run()  # defaults to transport="stdio"
+  ```
+
+```bash
+$ git clone https://github.com/harishsg993010/damn-vulnerable-MCP-server
+$ cd damn-vulnerable-MCP-server && python3 -m venv .venv-dvmcp \
+    && .venv-dvmcp/bin/pip install 'mcp[cli]<2.0'
+$ cp run_stdio.py challenges/medium/challenge4/
+$ uv run mcp-audit scan \
+    --source-dir damn-vulnerable-MCP-server/challenges/medium/challenge4 \
+    --server-id dvmcp-challenge4 \
+    -- damn-vulnerable-MCP-server/.venv-dvmcp/bin/python \
+       damn-vulnerable-MCP-server/challenges/medium/challenge4/run_stdio.py
+
+Server: Challenge 4 - Rug Pull Attack (version 1.29.1)
+Transport: stdio
+Server ID (rug-pull baseline key): dvmcp-challenge4
+
+CRITICAL (1)
+  •  Hardcoded AWS access key ID
+    location: .../challenges/medium/challenge4/server.py:38
+    Matched vendor secret pattern 'AWS access key ID' in source code.
+
+                                 Check coverage
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Check                        ┃ Status         ┃ Detail                       ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Unicode tag-block /          │ RAN            │ no findings                  │
+│ invisible-character          │                │                              │
+│ concealment                  │                │                              │
+│ (unicode-concealment)        │                │                              │
+│ Hardcoded secrets in source  │ RAN            │ 1 finding(s)                 │
+│ (secrets-hardcoded)          │                │                              │
+│ Insecure transport / missing │ NOT APPLICABLE │ server was inspected over    │
+│ auth (transport-security)    │                │ stdio (local subprocess      │
+│                              │                │ pipes) [...]                 │
+│ Rug-pull detection (tool     │ RAN            │ no baseline existed for      │
+│ definition drift)            │                │ server-id 'dvmcp-challenge4' │
+│ (rug-pull-detection)         │                │ [...] baseline created       │
+└──────────────────────────────┴────────────────┴──────────────────────────────┘
+
+FAIL: 1 critical/high finding(s) (1 critical, 0 high).
+$ echo $?
+1
+```
+
+Worth being precise about what this is and isn't: this challenge is
+*named* "Rug Pull Attack" and its advertised vulnerability is a tool that
+mutates its own docstring after three calls. We tested that specific
+mechanic directly (calling the tool four times over a real MCP session
+and diffing `list_tools()` before/after) and confirmed the mutated
+`__doc__` never reaches the tool description `FastMCP` actually serves
+over the protocol — a runtime behavior change with no footprint in
+protocol-level metadata, which is exactly the kind of thing a
+static/snapshot scanner like `mcp-audit` cannot see and shouldn't claim
+to. What `mcp-audit` *did* catch, correctly and via `--source-dir`, is a
+separate, real hardcoded AWS access key ID sitting in that same
+challenge's source (an `AKIA...`-format placeholder, the same convention
+AWS's own docs use for examples — not a live credential, but a byte-for-
+byte match for the format `secrets-hardcoded` looks for). A scanner that
+blurred that distinction to make a better demo would be doing exactly
+what this project's coverage table exists to prevent.
+
 ## Install
 
 Not published to PyPI yet — this is early-stage. Clone and run from source:
