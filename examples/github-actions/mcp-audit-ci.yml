@@ -1,0 +1,124 @@
+# mcp-audit as a CI security gate
+# ---------------------------------------------------------------------------
+# Example for people building their OWN MCP server who want mcp-audit to run
+# on every pull request and every push to main, and to fail the build if it
+# finds a critical/high severity issue. This is not mcp-audit's own CI — copy
+# this file into YOUR server's repo (e.g. .github/workflows/mcp-audit.yml)
+# and edit the two things marked "replace" below.
+#
+# What this workflow does:
+#   1. Checks out your repo.
+#   2. Installs mcp-audit (from GitHub — it's not on PyPI yet, see below).
+#   3. Runs `mcp-audit scan --format json` against YOUR server's start
+#      command and writes the JSON report to a file.
+#   4. Relies on mcp-audit's own exit code to fail the job: `scan` calls
+#      sys.exit(1) when it reports any critical/high finding, sys.exit(0)
+#      otherwise (see src/mcp_audit/cli.py in the mcp-audit repo). GitHub
+#      Actions already fails a step — and therefore the job — on a non-zero
+#      exit code, so there is no extra "if exit code != 0" logic needed here.
+#      Do NOT pipe the scan command through something that swallows its exit
+#      code (e.g. `| tee file.json` without `pipefail`), or you'll silently
+#      turn this gate into a no-op.
+#   5. Uploads the JSON report as a workflow artifact (even on failure) so a
+#      human can open it from the Actions run without re-running the scan.
+#
+# Supply-chain hardening:
+#   Every `uses:` below is pinned to a full commit SHA (not just a version
+#   tag like `@v7`), with the tag as a trailing comment for readability. Tags
+#   can be moved by the action's maintainer (accidentally or via a
+#   compromised account); a commit SHA cannot. SHAs here were resolved
+#   against each action's GitHub releases on 2026-08-27 — re-verify
+#   periodically, or let Dependabot do it for you: GitHub's
+#   `github-actions` package ecosystem in Dependabot understands pinned SHAs
+#   and will open PRs bumping both the SHA and the version comment as new
+#   releases ship (see docs: Keeping your actions up to date with Dependabot).
+#
+# Least privilege:
+#   The default GITHUB_TOKEN permissions in many orgs are broad
+#   (read/write across several scopes). This workflow only ever needs to
+#   read the checked-out code and write a workflow artifact, so permissions
+#   are explicitly narrowed to `contents: read` at the top level instead of
+#   relying on whatever the repo/org default happens to be.
+
+name: mcp-audit security scan
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  mcp-audit-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # Optional but recommended: cache mcp-audit's rug-pull baselines
+      # (~/.mcp-audit/baselines/) across runs. GitHub Actions runners are
+      # ephemeral — without this, every run starts with no baseline, so the
+      # rug-pull check just creates a fresh one each time and can never
+      # actually detect a tool definition changing between runs. Pin a
+      # stable --server-id below (not the default hash of the launch
+      # command) so the cache key and the baseline key stay consistent.
+      - name: Cache mcp-audit rug-pull baselines
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.mcp-audit/baselines
+          key: mcp-audit-baselines-${{ runner.os }}
+
+      # mcp-audit is not published to PyPI yet (early-stage project) — install
+      # it straight from its GitHub repo. Once/if it ships to PyPI, replace
+      # this with: pip install mcp-audit
+      # You could use `uv` instead of pip here (uv pip install ...) if your
+      # own project already standardizes on uv; pip needs no extra setup
+      # step, so it's used here to keep this example minimal.
+      - name: Install mcp-audit
+        run: pip install git+https://github.com/marcoslozina/mcp-audit.git
+
+      # -----------------------------------------------------------------
+      # << replace with your server's start command >>
+      #
+      # Everything after the `--` is passed literally to YOUR server's
+      # argv — mcp-audit's own options (--source-dir, --server-id,
+      # --update-baseline, --format) must all go BEFORE the `--`, never
+      # after. See "Flag order matters" in the mcp-audit README:
+      # https://github.com/marcoslozina/mcp-audit#-flag-order-matters
+      #
+      # Examples of what the placeholder below could become:
+      #   python my_server.py
+      #   node dist/server.js
+      #   npx -y my-mcp-server-package
+      #
+      # --source-dir enables the hardcoded-secrets check (optional, requires
+      # source access); --server-id pins a stable rug-pull baseline key
+      # instead of the default hash-of-launch-command (recommended in CI,
+      # and required for the cache step above to be useful across runs).
+      # -----------------------------------------------------------------
+      - name: Run mcp-audit scan
+        run: |
+          mcp-audit scan \
+            --format json \
+            --source-dir . \
+            --server-id my-mcp-server \
+            -- << replace with your server's start command >> \
+            > mcp-audit-report.json
+
+      # Runs whether the scan step above passed or failed, so the report is
+      # still available for review when the gate blocks a PR.
+      - name: Upload mcp-audit report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcp-audit-report
+          path: mcp-audit-report.json
+          retention-days: 30

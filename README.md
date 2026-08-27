@@ -272,6 +272,31 @@ actually didn't check anything is worse than one that admits the gap. Every
 `scan` run ends with a coverage table making this explicit — `ran` vs.
 `skipped` vs. `not applicable`, with a reason for each.
 
+## Using mcp-audit in CI
+
+`scan --format json` is designed to sit in a pipeline as a gate: it prints a
+machine-readable report and exits `1` on any critical/high finding, `0`
+otherwise — no extra glue code needed to make a CI job fail.
+
+A complete, commented GitHub Actions workflow is included at
+[`examples/github-actions/mcp-audit-ci.yml`](examples/github-actions/mcp-audit-ci.yml).
+Copy it into your own MCP server's repo (e.g.
+`.github/workflows/mcp-audit.yml`) and replace the placeholder server
+start command. It covers:
+
+- Installing `mcp-audit` from this repo via `pip install
+  git+https://github.com/marcoslozina/mcp-audit.git` (not on PyPI yet).
+- Running `mcp-audit scan --format json` against your server and letting
+  its exit code fail the job — GitHub Actions does this automatically on a
+  non-zero exit code.
+- Uploading the JSON report as a workflow artifact, so a human can review
+  it even when the gate blocks a PR.
+- Minimal `permissions: contents: read` and every action pinned to a full
+  commit SHA rather than a movable version tag, as supply-chain hardening.
+- Optionally caching `~/.mcp-audit/baselines/` across runs so the rug-pull
+  check has something to compare against instead of starting fresh every
+  build.
+
 ## Roadmap
 
 - HTTP/SSE transport support (unlocks the transport-security check for real)
