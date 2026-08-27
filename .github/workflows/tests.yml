@@ -1,0 +1,40 @@
+# Automated test suite for mcp-audit (unit + integration tests via pytest,
+# plus lint via ruff). This is separate from smoke-test.yml on purpose:
+# smoke-test.yml is a real end-to-end check that the published CLI still
+# behaves correctly against the example servers (and stays valuable even
+# with a full test suite in place); this workflow runs the pytest suite
+# under tests/, which covers unit-level and CLI-integration behavior that
+# the smoke test doesn't (e.g. --format json validity, rug-pull baseline
+# diffing, secrets detection, Unicode-concealment decoding).
+
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run ruff
+        run: uvx ruff check .
+
+      - name: Run pytest
+        run: uv run pytest -v
