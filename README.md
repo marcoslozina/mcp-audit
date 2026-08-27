@@ -656,6 +656,14 @@ the CLI, which still phones home to nowhere.
 ## Roadmap
 
 - HTTP/SSE transport support (unlocks the transport-security check for real)
+- Unauthenticated discovery-surface check for remote transports: whether a
+  server hands out `initialize`/`list_tools` (full tool/resource/prompt
+  list, descriptions included) to anyone who reaches the URL, before any
+  auth step. This is a distinct risk from `transport-security` (which only
+  verifies the transport is encrypted) — encrypted-but-unauthenticated still
+  leaks the entire server surface to whoever finds the URL. Not applicable
+  today since stdio has no such handshake; blocked on the item above
+  (surfaced via community feedback on r/mcp)
 - More checks: tool-poisoning heuristics beyond Unicode concealment,
   cross-tool shadowing
 - Integration with the official MCP registry (scan-on-publish / scan-on-list)
