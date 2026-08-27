@@ -709,4 +709,4 @@ would be.
 
 ## Built by
 
-[Marcos Lozina](https://github.com/marcoslozina) ([LinkedIn](https://linkedin.com/in/marcoslozina)) — a solo-founder project, built in spare time because this gap in MCP tooling seemed worth closing. Issues, PRs, and honest feedback are how it gets better.
+[Marcos Lozina](https://github.com/marcoslozina) ([LinkedIn](https://www.linkedin.com/in/marcos-raimundo-lozina)) — a solo-founder project, built in spare time because this gap in MCP tooling seemed worth closing. Issues, PRs, and honest feedback are how it gets better.
