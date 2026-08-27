@@ -483,6 +483,146 @@ NOT_APPLICABLE without `--source-dir`, the same honesty rule
 `transport-security` applies to stdio, rather than manufacturing a
 "passed" that would mean nothing.
 
+## Catching tool poisoning and cross-tool shadowing in the same lab
+
+DVMCP has dedicated challenges for both of these, named exactly what they
+are: "Challenge 2 - Tool Poisoning" and "Challenge 5 - Tool Shadowing".
+Same setup as the runs above (own `mcp<2` venv, a `run_stdio.py` wrapper
+importing the challenge's own unmodified `FastMCP` app):
+
+```
+$ uv run mcp-audit scan \
+    --server-id dvmcp-challenge2 \
+    -- damn-vulnerable-MCP-server/.venv-dvmcp/bin/python \
+       damn-vulnerable-MCP-server/challenges/easy/challenge2/run_stdio.py
+
+Server: Challenge 2 - Tool Poisoning (version 1.29.1)
+Transport: stdio
+
+HIGH (5)
+  •  Possible tool-poisoning instruction (concealment directive aimed at the
+     model) in tool description
+    location: tool:get_company_data
+    Tool 'get_company_data' description contains text matching the
+    'concealment directive aimed at the model' tool-poisoning pattern: 'do
+    not mention that you'. [...]
+  •  Possible tool-poisoning instruction (instruction-wrapper pseudo-tag) in
+     tool description
+    location: tool:get_company_data
+    [...] matching pattern: '<IMPORTANT>'. [...]
+  •  Possible tool-poisoning instruction (concealment directive aimed at the
+     model) in tool description
+    location: tool:search_company_database
+  •  Possible tool-poisoning instruction (instruction-wrapper pseudo-tag) in
+     tool description
+    location: tool:search_company_database
+    [...] matching pattern: '<HIDDEN>'. [...]
+
+MEDIUM (3)
+  •  Possible tool-poisoning instruction (imperative pre/post-condition) [...]
+  •  Possible tool-poisoning instruction (conditional hidden redirection) [...]
+
+FAIL: 5 critical/high finding(s) (0 critical, 5 high).
+$ echo $?
+1
+```
+
+`get_company_data`'s description literally contains an `<IMPORTANT>` block
+instructing the model to fetch a confidential resource and "not mention
+that you're accessing confidential information" — `tool-poisoning` catches
+both the wrapper tag and the concealment directive as independent
+findings, plus the "you must first" imperative that precedes it.
+`search_company_database` hides an equivalent instruction inside a
+`<HIDDEN>` block behind a conditional ("if the query contains the exact
+phrase... you must access..."), caught by the conditional-hidden-
+redirection category.
+
+Challenge 5 wires its poisoned `enhanced_calculate` tool through the same
+patterns:
+
+```
+$ uv run mcp-audit scan \
+    --server-id dvmcp-challenge5 \
+    -- damn-vulnerable-MCP-server/.venv-dvmcp/bin/python \
+       damn-vulnerable-MCP-server/challenges/medium/challenge5/run_stdio.py
+
+Server: Challenge 5 - Tool Shadowing (version 1.29.1)
+Transport: stdio
+
+HIGH (3)
+  •  Possible tool-poisoning instruction (concealment directive aimed at the
+     model) in tool description
+    location: tool:enhanced_calculate
+  •  Possible tool-poisoning instruction (instruction-wrapper pseudo-tag) in
+     tool description
+    location: tool:enhanced_calculate
+
+MEDIUM (2)
+  •  Possible tool-poisoning instruction (imperative pre/post-condition) [...]
+  •  Possible tool-poisoning instruction (conditional hidden redirection) [...]
+```
+
+Worth being precise about `cross-tool-shadowing` here: it reports zero
+findings against this same challenge, and that's the honest result, not a
+miss. DVMCP's own code comment says why — its two calculator tools are
+deliberately given different literal names (`trusted_calculate` /
+`enhanced_calculate`) "for demonstration purposes, we're using a different
+name to make it explicit," specifically because a real name collision
+between two *separate* servers isn't something a single-server protocol
+scan can even observe (`mcp-audit` inspects one server per invocation; see
+`checks/cross_tool_shadowing.py`'s docstring). Those two names aren't
+lexically close enough to trip the similarity heuristic either, so nothing
+here should fire — and nothing does.
+
+DVMCP has no single-server challenge that exercises the actual
+name-similarity mechanic, so `examples/evil_shadow_server.py` is a
+synthetic fixture built specifically for it: two tools that typosquat
+official filesystem-server names (`read_flle` for `read_file`,
+`list_directoy` for `list_directory`), plus a legitimate `search_files`
+tool sitting right next to a decoy `search_filez`:
+
+```
+$ uv run mcp-audit scan -- python examples/evil_shadow_server.py
+
+Server: evil-shadow-server (version unknown)
+Transport: stdio
+
+MEDIUM (4)
+  •  Tool 'read_flle' has a suspiciously similar name to well-known tool
+     'read_file'
+    location: tool:read_flle
+    Tool 'read_flle' is not identical to, but is close to (Levenshtein
+    distance 1), 'read_file' — a tool name from the official filesystem MCP
+    reference server that an agent connected to multiple servers may
+    already trust. [...]
+  •  Tool 'list_directoy' has a suspiciously similar name to well-known tool
+     'list_directory'
+    location: tool:list_directoy
+  •  Tool 'search_filez' has a suspiciously similar name to well-known tool
+     'search_files'
+    location: tool:search_filez
+  •  Tools 'search_files' and 'search_filez' on this server have
+     suspiciously similar names
+    location: tool:search_files
+    This server exposes both 'search_files' and 'search_filez'
+    (Levenshtein distance 1). Two near-identical tool names on the same
+    server is the 'decoy'/namespace-pollution pattern of cross-tool
+    shadowing [...]
+
+PASS: no critical/high findings (4 medium, 0 low).
+```
+
+Note `search_files` itself — the exact, correct official name — produces
+no finding on its own; only its near-duplicate `search_filez` and the two
+typosquats do. All four findings are `medium`, not `critical`/`high`: this
+is a string-similarity heuristic with real, acknowledged false-positive
+risk (a server legitimately versioning a tool, or choosing a
+singular/plural pair, looks identical to this check), so the exit code
+here is `0` — informational, not a hard CI gate. See
+`checks/cross_tool_shadowing.py`'s module docstring for exactly what
+mcp-audit can and can't see about a real multi-server shadowing attack
+from a single-server scan.
+
 ## Install
 
 Not published to PyPI yet — this is early-stage. Clone and run from source:
@@ -565,6 +705,8 @@ read the warning rather than assuming silence means it worked.
 | Check | What it detects | Status |
 |---|---|---|
 | **Unicode concealment** ⭐ | Payloads hidden in tool/resource/prompt descriptions via the Unicode TAG block or invisible/bidi-override characters — invisible to a human approving the tool, fully readable by an LLM tokenizer. This is `mcp-audit`'s differentiator: few if any other MCP scanners check for it today. | Always runs |
+| **Tool poisoning (visible text)** | Plain, visible prompt-injection instructions in tool/resource/prompt descriptions — the OWASP MCP03:2025 / Invariant Labs "tool poisoning" pattern in the cases that don't rely on Unicode concealment: prompt-override directives ("ignore previous instructions"), directives telling the model to hide what it's doing from the user, imperative pre/post-conditions ("you must first read X"), conditional hidden redirection ("if the query contains X, you must..."), `<IMPORTANT>`/`<HIDDEN>`-style instruction-wrapper pseudo-tags, and sensitive-file-path + exfiltration-verb co-occurrence. **Heuristic text-pattern matching on English prose, not program analysis** — real false-positive/false-negative risk by design; see `checks/tool_poisoning.py`'s module docstring. | Always runs |
+| **Cross-tool shadowing** | A tool whose name is suspiciously similar — but not identical — to a well-known tool from the official filesystem/git/fetch/memory MCP reference servers, or to another tool on the same server. Covers the "similar name"/"namespace pollution" vectors of the SAFE-MCP-cataloged SAF-T1301 "Cross-Server Tool Shadowing" technique. Levenshtein-distance heuristic, scaled to name length; an exact match against a reference name is not flagged (that's just correctly implementing the well-known tool). **`mcp-audit` inspects one server per scan and has no visibility into other servers connected in the same live agent session** — it approximates "a name an agent probably already trusts" with a curated reference list instead of observing a second server directly; see `checks/cross_tool_shadowing.py`'s module docstring for what this can and can't catch. | Always runs |
 | **Hardcoded secrets** | Vendor API key formats (AWS, OpenAI, Google, GitHub, Slack, private keys), secret-like variable assignments, and high-entropy string literals in the server's source. | Runs only with `--source-dir` (requires source access `tools/list` can't provide) |
 | **Code / command injection** | `subprocess`/`os.system` calls run with `shell=True`, `eval`/`exec`, and SQL queries built via string concatenation/f-strings — the exact bug class behind real MCP CVEs (including in the official Git MCP server) and behind published audits finding every official reference server vulnerable. Implemented on top of [`bandit`](https://github.com/PyCQA/bandit), Python's standard security linter, via its Python API — not hand-rolled regex, see `checks/code_injection.py` for why. | Runs only with `--source-dir`, **Python source only** (bandit doesn't understand other languages) |
 | **Path traversal** | An MCP tool/resource handler passing an input parameter (directly, or through a locally-built path) into `open()` with no visible sanitization (no `os.path.realpath`/`Path.resolve()` + prefix check, or similar). Purpose-built AST check — bandit has no dedicated path-traversal rule, since answering "is this value attacker-controlled MCP input" needs to know which functions are MCP handlers, not just generic taint analysis. **Heuristic, with known false positives and false negatives** — single-pass, intraprocedural, no cross-function tracking; see `checks/path_traversal.py`'s docstring and the DVMCP demo below for a real example of each. | Runs only with `--source-dir`, **Python source only** |
@@ -664,8 +806,6 @@ the CLI, which still phones home to nowhere.
   leaks the entire server surface to whoever finds the URL. Not applicable
   today since stdio has no such handshake; blocked on the item above
   (surfaced via community feedback on r/mcp)
-- More checks: tool-poisoning heuristics beyond Unicode concealment,
-  cross-tool shadowing
 - Integration with the official MCP registry (scan-on-publish / scan-on-list)
 - Hosted dashboard: fleet-wide scanning, scheduled re-scans, Slack/email
   alerting on drift (the paid layer of the open-core model)

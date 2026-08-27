@@ -101,6 +101,14 @@ don't rely on it catching every case — get the order right instead.
   with no rate-limiting library/decorator anywhere in the file — exercises
   `ResourceLimitsCheck`'s source-level portion via `--source-dir`. Only
   ever parsed via `ast`, never imported/executed.
+- `examples/evil_shadow_server.py` — real MCP server (run over stdio, not
+  just parsed) exposing tool names chosen to typosquat well-known official
+  reference-server tool names (`read_flle`/`list_directoy` vs
+  `read_file`/`list_directory`), plus a legitimate `search_files` sitting
+  next to a decoy `search_filez` — exercises `CrossToolShadowingCheck`
+  end-to-end, no `--source-dir` needed. `search_files` itself must not
+  produce a finding (it's the correct, official name); only the
+  near-duplicates should.
 
 ## Known SDK gotchas (things we already got burned by)
 

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **tool-poisoning** check: heuristic detection of plain, visible
+  prompt-injection instructions in tool/resource/prompt descriptions
+  (prompt-override directives, model-directed concealment instructions,
+  imperative pre/post-conditions, conditional hidden redirection,
+  `<IMPORTANT>`/`<HIDDEN>`-style instruction-wrapper tags, and
+  sensitive-path/exfiltration-verb co-occurrence) — the visible-text half
+  of the tool-poisoning attack class `unicode-concealment` doesn't cover.
+  Always runs, no `--source-dir` needed.
+- **cross-tool-shadowing** check: heuristic detection of a tool name
+  suspiciously similar (but not identical) to a well-known tool from the
+  official filesystem/git/fetch/memory MCP reference servers, or to
+  another tool on the same server — the "similar name"/"namespace
+  pollution" vectors of the cross-tool-shadowing/name-squatting attack
+  class. Levenshtein-distance heuristic. Always runs, no `--source-dir`
+  needed.
 - `.github/workflows/traffic-archive.yml`: a daily scheduled workflow (plus
   manual `workflow_dispatch`) that archives GitHub's repo traffic data
   (views/clones) to `data/traffic-history.jsonl`, since GitHub's traffic API
