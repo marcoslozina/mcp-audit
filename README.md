@@ -278,6 +278,17 @@ actually didn't check anything is worse than one that admits the gap. Every
 machine-readable report and exits `1` on any critical/high finding, `0`
 otherwise — no extra glue code needed to make a CI job fail.
 
+The JSON report includes a top-level `"schema_version"` integer (currently
+`1`), bumped only when the report's shape changes in a breaking way (a field
+removed or repurposed — adding a field doesn't bump it). If you're building
+an integration around this output, check `schema_version` before parsing so
+a future format change fails loudly instead of silently misreading a report.
+If the MCP handshake itself fails (target command not found, protocol
+mismatch, timeout), `--format json` still prints valid JSON to stdout —
+`{"schema_version": 1, "error": "<message>", "exit_code": 1}` — instead of a
+plain-text error or a Python traceback, so a CI job parsing the output never
+has to special-case a broken pipe.
+
 A complete, commented GitHub Actions workflow is included at
 [`examples/github-actions/mcp-audit-ci.yml`](examples/github-actions/mcp-audit-ci.yml).
 Copy it into your own MCP server's repo (e.g.

@@ -23,6 +23,13 @@ from mcp_audit.parser import ServerSnapshot, inspect_server_sync
 
 _SEVERITY_ORDER = ["critical", "high", "medium", "low"]
 
+# Bumped only on a breaking change to the JSON report shape (fields removed,
+# renamed, or repurposed). Adding a new field is not breaking and does not
+# require a bump. External integrations parsing `scan --format json` should
+# key off this to detect a format they don't understand yet, instead of
+# breaking silently.
+_SCHEMA_VERSION = 1
+
 # Severity -> rich style, per the product's "transparency of coverage" bar:
 # critical/high need to read as urgent, medium as a caution, low/info as
 # background noise you can skim past.
@@ -177,6 +184,7 @@ def _build_report(
     gating_count = summary["critical"] + summary["high"]
 
     return {
+        "schema_version": _SCHEMA_VERSION,
         "server": {
             "name": snapshot.server_name,
             "version": snapshot.server_version,
@@ -192,8 +200,40 @@ def _build_report(
     }
 
 
+def _build_error_report(message: str) -> dict:
+    """Structured JSON shape for a scan that never got a snapshot to report on.
+
+    Used when the MCP handshake itself fails (target command not found,
+    process crashed, protocol/version mismatch, timeout, etc.) — the normal
+    report shape assumes a ServerSnapshot exists, which isn't true here.
+    """
+    return {
+        "schema_version": _SCHEMA_VERSION,
+        "error": message,
+        "exit_code": 1,
+    }
+
+
 def _print_report_json(report: dict) -> None:
     click.echo(json.dumps(report, indent=2))
+
+
+def _fail_scan(message: str, output_format: str) -> None:
+    """Report a scan-ending error (handshake/transport failure, missing
+    command, etc.) in the format the user asked for, then exit 1.
+
+    `--format json` is meant to be consumed by CI and other tooling — a
+    Python traceback or a plain-text stderr line on the exact same failure
+    path is a broken contract for that use case, since a JSON parser fails
+    on it too. So an error under `--format json` prints structured JSON on
+    stdout (mirroring the shape a successful `_build_report` would use,
+    minus fields that require a snapshot we never got) instead of stderr text.
+    """
+    if output_format == "json":
+        click.echo(json.dumps(_build_error_report(message), indent=2))
+    else:
+        click.echo(f"error: {message}", err=True)
+    sys.exit(1)
 
 
 def _print_report_human(report: dict) -> None:
@@ -324,11 +364,9 @@ def scan(
     try:
         snapshot = inspect_server_sync(command, args)
     except FileNotFoundError:
-        click.echo(f"error: command not found: {command}", err=True)
-        sys.exit(1)
+        _fail_scan(f"command not found: {command}", output_format)
     except Exception as exc:  # noqa: BLE001 - surface any handshake/transport failure to the user
-        click.echo(f"error: failed to inspect server: {exc}", err=True)
-        sys.exit(1)
+        _fail_scan(f"failed to inspect server: {exc}", output_format)
 
     resolved_server_id = server_id or compute_default_server_id(command, args)
 
