@@ -393,6 +393,96 @@ not runtime behavior, so it sees code paths a protocol-level check never
 could — and also why it's honest about being Python-only (see the "Checks
 implemented" table above).
 
+## Catching excessive permission scope in the same lab
+
+"Challenge 3 - Excessive Permission Scope" — the same DVMCP challenge used
+for the `path-traversal` demo above — is also a direct match for
+`overprivileged-scopes`: its `read_file` tool is described as reading "a
+file from the public directory," but its schema places no restriction on
+the `filename` parameter that description implies. Same setup as the runs
+above:
+
+```
+$ uv run mcp-audit scan \
+    --source-dir damn-vulnerable-MCP-server/challenges/easy/challenge3 \
+    --server-id dvmcp-challenge3 \
+    -- damn-vulnerable-MCP-server/.venv-dvmcp/bin/python \
+       damn-vulnerable-MCP-server/challenges/easy/challenge3/run_stdio.py
+
+Server: Challenge 3 - Excessive Permission Scope (version 1.29.1)
+Transport: stdio
+
+MEDIUM (1)
+  •  Tool 'read_file' promises a restricted scope its schema doesn't enforce
+    location: tool:read_file
+    Tool 'read_file's description ('Read a file from the public directory.
+    ...') reads as promising a bounded/restricted operation, but its
+    'filename' parameter is a plain string with no enum/pattern/const
+    narrowing what value it can hold — nothing at the protocol level stops
+    a caller from passing an arbitrary value (e.g. '../../etc/passwd').
+    This is a naming/schema heuristic, not proof of a vulnerability: the
+    server may enforce the restriction in code this check can't see
+    without --source-dir.
+
+FAIL: 5 critical/high finding(s) (0 critical, 5 high).
+```
+
+That MEDIUM finding runs at the protocol level alone — no `--source-dir`
+required to catch it, since it's purely a mismatch between what the
+description promises and what the schema enforces. Worth being clear about
+what this heuristic misses in the same run: `search_files` in this same
+challenge is *also* excessively scoped (it searches the private directory
+too), but its parameter is named `keyword`, not one of the
+filesystem-locator names this check's naming heuristic looks for — so it
+isn't flagged here. That's the honest cost of a naming-convention-based
+signal instead of real dataflow analysis; see
+`checks/overprivileged_scopes.py`'s module docstring.
+
+## Resource limits: an honest ecosystem gap, not a false pass
+
+DVMCP has no challenge specifically about missing rate limits, so
+`examples/vulnerable_resource_limits.py` is a small synthetic fixture
+instead: a tool that calls a paid third-party translation API with no
+rate-limiting library or decorator anywhere in the file. Scanning it
+(alongside the other example fixtures) shows both levels of
+`resource-limits` at once:
+
+```
+$ uv run mcp-audit scan --source-dir examples -- python examples/toy_server.py
+...
+LOW (1)
+  •  No rate-limiting pattern found for handler 'call_translation_api' calling
+     an external HTTP API
+    location: examples/vulnerable_resource_limits.py:32
+    Handler 'call_translation_api' calls an external HTTP API, and no known
+    rate-limiting library or decorator marker [...] was found anywhere in
+    this file. Low-confidence, informational: limiting could be enforced by
+    an API gateway, reverse proxy, hosting platform, or a pattern this check
+    doesn't recognize [...]
+...
+│ Rate limits / usage quotas / │ RAN            │ no standardized              │
+│ call budgets                 │                │ protocol-level rate-limit    │
+│ (resource-limits)            │                │ declaration exists (see      │
+│                              │                │ module docstring); scanned 7 │
+│                              │                │ Python source file(s) [...]  │
+```
+
+The protocol-level half of this check is deliberately not a "finding" at
+all against any server, including this one: the MCP specification
+(2025-06-18) was checked directly — the `Tool` object's fields
+(`name`/`title`/`description`/`inputSchema`/`outputSchema`/`annotations`),
+`ToolAnnotations`'s four fields
+(`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`), and
+the `tools` capability's one field (`listChanged`) — none of them express
+a rate limit, quota, or budget. The spec's own security considerations
+say servers **MUST** "Rate limit tool invocations," while giving servers
+no structured way to declare that they do, or a client (or a scanner)
+any way to verify it. That's a real gap in the MCP ecosystem today, not a
+defect in any specific server — so `resource-limits` reports it as
+NOT_APPLICABLE without `--source-dir`, the same honesty rule
+`transport-security` applies to stdio, rather than manufacturing a
+"passed" that would mean nothing.
+
 ## Install
 
 Not published to PyPI yet — this is early-stage. Clone and run from source:
@@ -478,6 +568,8 @@ read the warning rather than assuming silence means it worked.
 | **Hardcoded secrets** | Vendor API key formats (AWS, OpenAI, Google, GitHub, Slack, private keys), secret-like variable assignments, and high-entropy string literals in the server's source. | Runs only with `--source-dir` (requires source access `tools/list` can't provide) |
 | **Code / command injection** | `subprocess`/`os.system` calls run with `shell=True`, `eval`/`exec`, and SQL queries built via string concatenation/f-strings — the exact bug class behind real MCP CVEs (including in the official Git MCP server) and behind published audits finding every official reference server vulnerable. Implemented on top of [`bandit`](https://github.com/PyCQA/bandit), Python's standard security linter, via its Python API — not hand-rolled regex, see `checks/code_injection.py` for why. | Runs only with `--source-dir`, **Python source only** (bandit doesn't understand other languages) |
 | **Path traversal** | An MCP tool/resource handler passing an input parameter (directly, or through a locally-built path) into `open()` with no visible sanitization (no `os.path.realpath`/`Path.resolve()` + prefix check, or similar). Purpose-built AST check — bandit has no dedicated path-traversal rule, since answering "is this value attacker-controlled MCP input" needs to know which functions are MCP handlers, not just generic taint analysis. **Heuristic, with known false positives and false negatives** — single-pass, intraprocedural, no cross-function tracking; see `checks/path_traversal.py`'s docstring and the DVMCP demo below for a real example of each. | Runs only with `--source-dir`, **Python source only** |
+| **Overprivileged scopes** | A tool declaring or using broader access than its name/description implies — the "excessive permission scope" class (DVMCP's Challenge 3 is the canonical example: a `read_file` tool described as reading "a file from the public directory" that actually accepts any path). Two independent levels: protocol-level (always runs — a scope-narrowing description paired with an unconstrained resource-locator parameter, or schema parameters spanning multiple privilege categories the description doesn't mention) and source-level (`--source-dir` — a handler importing/calling a high-privilege primitive, e.g. `subprocess`, raw sockets, arbitrary HTTP, filesystem writes, that its name/docstring never mentions). **Heuristic at both levels** — naming and schema shape are conventions, not enforcement; see `checks/overprivileged_scopes.py`'s docstring. | Protocol-level always runs; source-level also runs with `--source-dir`, **Python source only** |
+| **Resource limits** | Whether anything limits how often an agent can call a tool — without this, an agent can call a tool without bound (DoS, or unbounded spend against a paid third-party API). Protocol level was checked directly against the MCP spec (2025-06-18), not assumed: **there is no standardized mechanism for a server to declare a rate limit, quota, or budget today** — the spec mandates ("MUST rate limit tool invocations") without giving servers any structured way to declare compliance, so this reports honestly as not applicable, the same posture as `transport-security` for stdio. Source level (`--source-dir`) looks for known rate-limiting libraries/decorators (`slowapi`, `flask-limiter`, `aiolimiter`, etc.) and flags handlers calling external APIs/subprocesses when none are found anywhere in the file. **Low-confidence by design** — absence of a recognized marker is not proof of absence of a limit (it could be enforced by a gateway, proxy, or platform this check can't see). | Protocol-level: not applicable (structural gap in the MCP ecosystem); source-level also runs with `--source-dir`, **Python source only** |
 | **Rug-pull detection** | A tool's description or input schema changing after a user already approved it, by comparing against a saved baseline in `~/.mcp-audit/baselines/`. New tools flagged as medium/informational, removed tools as low/informational, changed tools as high. | Always runs (creates baseline on first run) |
 | **Transport security** | Plaintext HTTP / missing declared auth on the server's transport. | **Honestly not applicable today** — `mcp-audit` currently only speaks stdio (local subprocess pipes), which has no transport-security question to answer. The check is structured to activate automatically once HTTP/SSE support lands. |
 
@@ -555,7 +647,7 @@ exact badge Markdown to paste is at
 
 - HTTP/SSE transport support (unlocks the transport-security check for real)
 - More checks: tool-poisoning heuristics beyond Unicode concealment,
-  cross-tool shadowing, excessive permission scopes
+  cross-tool shadowing
 - Integration with the official MCP registry (scan-on-publish / scan-on-list)
 - Hosted dashboard: fleet-wide scanning, scheduled re-scans, Slack/email
   alerting on drift (the paid layer of the open-core model)

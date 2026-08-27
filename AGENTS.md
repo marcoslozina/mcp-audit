@@ -91,6 +91,16 @@ don't rely on it catching every case — get the order right instead.
   handler that joins a parameter into a path and opens it with no
   realpath/resolve check, used to exercise `PathTraversalCheck` via
   `--source-dir`. Only ever parsed via `ast`, never imported/executed.
+- `examples/vulnerable_scope.py` — fixture with a fake `@mcp.tool()` handler
+  (`check_service_status`) whose name/docstring promise a narrow read-only
+  status check but whose body shells out via `subprocess` and writes a log
+  file — exercises `OverprivilegedScopesCheck`'s source-level portion via
+  `--source-dir`. Only ever parsed via `ast`, never imported/executed.
+- `examples/vulnerable_resource_limits.py` — fixture with a fake
+  `@mcp.tool()` handler that calls a metered third-party API via `requests`
+  with no rate-limiting library/decorator anywhere in the file — exercises
+  `ResourceLimitsCheck`'s source-level portion via `--source-dir`. Only
+  ever parsed via `ast`, never imported/executed.
 
 ## Known SDK gotchas (things we already got burned by)
 
