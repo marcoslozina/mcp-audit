@@ -20,3 +20,26 @@ mcp-audit = "mcp_audit:main"
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# Default rule set (E/F) plus a few high-signal categories. Deliberately not
+# exhaustive per the project's current maturity — see AGENTS.md for the
+# "don't gold-plate" testing philosophy applied here too.
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501", # line length is enforced by the formatter/line-length setting, not worth hard-failing CI on
+]
