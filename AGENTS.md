@@ -174,8 +174,45 @@ unconditionally. See `_fail_scan` in `cli.py`.
 
 ## Testing
 
-There is no unit test suite yet. The only automated verification is the
-smoke test in `.github/workflows/smoke-test.yml`, which runs `scan` against
-`examples/toy_server.py` (must pass, exit 0) and `examples/evil_server.py`
-(must be caught, exit 1) on every push/PR. Before submitting a change, run
-both scans locally and confirm the exit codes still match that expectation.
+There is a pytest suite under `tests/`, run via:
+
+```bash
+uv run pytest -v
+```
+
+- `tests/test_parser.py` — integration tests that connect for real to
+  `examples/toy_server.py` over stdio (no mocking) and assert on the
+  resulting `ServerSnapshot`.
+- `tests/checks/` — one file per check. Unit tests where possible
+  (`test_unicode_concealment.py`, `test_transport.py` build synthetic
+  `ServerSnapshot`/`ToolInfo` objects directly), integration-flavored where
+  the check inherently touches disk/state (`test_secrets.py` runs against
+  `examples/vulnerable_config.py`; `test_rug_pull.py` exercises baseline
+  create/compare/update against `tmp_path`).
+- `tests/test_cli.py` — end-to-end tests that invoke the CLI as a real
+  subprocess (`python -m mcp_audit.cli ...`) against `toy_server.py` and
+  `evil_server.py`, including `--format json` output validity.
+
+**Test isolation for the rug-pull baseline**: `RugPullCheck` stores baselines
+under `~/.mcp-audit/baselines` by default (see `checks/rug_pull.py`). Any
+test that goes through the CLI (which constructs `RugPullCheck` internally
+without a `baseline_dir`) MUST set the `MCP_AUDIT_BASELINE_DIR` env var to a
+temp directory first — the `baseline_dir_env` fixture in `tests/conftest.py`
+does this. Tests that construct `RugPullCheck` directly can instead pass
+`baseline_dir=tmp_path`. Either way, the test suite must never read or write
+the real developer's home directory — verify this if you touch
+`rug_pull.py`.
+
+Lint via `ruff` (`pyproject.toml` `[tool.ruff]`):
+
+```bash
+uvx ruff check .
+```
+
+Both `uv run pytest` and `uvx ruff check .` run in CI on every push/PR — see
+`.github/workflows/tests.yml`. The smoke test in
+`.github/workflows/smoke-test.yml` (real CLI against the example servers,
+asserting exit codes) still runs separately and independently; it remains
+valuable as an end-to-end check even with the pytest suite in place. Before
+submitting a change, run both the pytest suite and the two smoke-test scans
+locally.
