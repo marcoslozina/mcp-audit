@@ -209,10 +209,19 @@ Lint via `ruff` (`pyproject.toml` `[tool.ruff]`):
 uvx ruff check .
 ```
 
-Both `uv run pytest` and `uvx ruff check .` run in CI on every push/PR — see
-`.github/workflows/tests.yml`. The smoke test in
+Static type-checking via `mypy` (`pyproject.toml` `[tool.mypy]`), scoped to
+`src/` only — deliberately not `--strict`, per the same "don't gold-plate"
+philosophy as the ruff config, but enough to catch real type errors (missing
+annotations, wrong argument types):
+
+```bash
+uv run mypy src/
+```
+
+`uv run pytest`, `uvx ruff check .`, and `uv run mypy src/` all run in CI on
+every push/PR — see `.github/workflows/tests.yml`. The smoke test in
 `.github/workflows/smoke-test.yml` (real CLI against the example servers,
 asserting exit codes) still runs separately and independently; it remains
 valuable as an end-to-end check even with the pytest suite in place. Before
-submitting a change, run both the pytest suite and the two smoke-test scans
-locally.
+submitting a change, run the pytest suite, ruff, mypy, and the two
+smoke-test scans locally.
