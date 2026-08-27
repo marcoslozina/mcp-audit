@@ -1,0 +1,102 @@
+# Archives GitHub's repo traffic data (views/clones) beyond the 14-day
+# window the /traffic API otherwise loses forever. Not telemetry from the
+# mcp-audit CLI itself (the project ships zero tracking in the tool) — this
+# only reads GitHub's own server-side counters for THIS repo, the same data
+# already visible to the maintainer at github.com/marcoslozina/mcp-audit/pulse.
+#
+# --- Why this needs a PAT, not the automatic secrets.GITHUB_TOKEN ---
+#
+# Empirically confirmed (2026-08-27, workflow run against this same repo):
+# calling `gh api repos/marcoslozina/mcp-audit/traffic/views` with
+# secrets.GITHUB_TOKEN returns:
+#
+#   HTTP/2.0 403 Forbidden
+#   X-Accepted-Github-Permissions: administration=read
+#   {"message":"Resource not accessible by integration", ...}
+#
+# GitHub's traffic endpoints require "Administration" repository permission
+# (read) — see https://docs.github.com/en/rest/metrics/traffic. The
+# automatic GITHUB_TOKEN cannot be granted that permission at all; it isn't
+# among the scopes listed under "Permissions for the GITHUB_TOKEN" in
+# https://docs.github.com/en/actions/security-guides/automatic-token-authentication
+# (only contents, issues, pull-requests, actions, packages, etc.). No amount
+# of `permissions:` tuning in this file fixes that — it's a hard ceiling on
+# what GITHUB_TOKEN can ever do, not a missing checkbox.
+#
+# So this workflow expects a secret named TRAFFIC_PAT. One-time manual setup
+# (the maintainer has to do this by hand — a workflow cannot create its own
+# PAT):
+#
+#   1. https://github.com/settings/personal-access-tokens/new
+#      (fine-grained PAT, NOT classic)
+#   2. Resource owner: marcoslozina
+#   3. Repository access: "Only select repositories" -> mcp-audit
+#   4. Repository permissions -> Administration: Read-only
+#      (this is the only permission the traffic endpoints require; do not
+#      grant more than this)
+#   5. Generate token, copy it
+#   6. https://github.com/marcoslozina/mcp-audit/settings/secrets/actions
+#      -> "New repository secret" -> name it TRAFFIC_PAT -> paste the value
+#
+# Until TRAFFIC_PAT exists, the "Fetch traffic data" step below fails fast
+# with an explicit error instead of a confusing 403.
+
+name: traffic archive
+
+on:
+  schedule:
+    - cron: "17 4 * * *" # once a day, off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch traffic data
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_PAT }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::TRAFFIC_PAT secret is not set. See the setup steps in this workflow's own header comment (.github/workflows/traffic-archive.yml) to create a fine-grained PAT with 'Administration: Read-only' on this repo."
+            exit 1
+          fi
+
+          mkdir -p data
+
+          timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          views="$(gh api repos/marcoslozina/mcp-audit/traffic/views)"
+          clones="$(gh api repos/marcoslozina/mcp-audit/traffic/clones)"
+          # Best-effort extras: don't fail the whole run if these 404/500 —
+          # views/clones are the data we actually care about preserving.
+          referrers="$(gh api repos/marcoslozina/mcp-audit/traffic/popular/referrers 2>/dev/null || echo '[]')"
+          paths="$(gh api repos/marcoslozina/mcp-audit/traffic/popular/paths 2>/dev/null || echo '[]')"
+
+          jq -nc \
+            --arg ts "$timestamp" \
+            --argjson views "$views" \
+            --argjson clones "$clones" \
+            --argjson referrers "$referrers" \
+            --argjson paths "$paths" \
+            '{fetched_at: $ts, views: $views, clones: $clones, popular_referrers: $referrers, popular_paths: $paths}' \
+            >> data/traffic-history.jsonl
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/traffic-history.jsonl
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(data): archive traffic snapshot [skip ci]"
+          git push origin HEAD:main

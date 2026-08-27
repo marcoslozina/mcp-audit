@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `.github/workflows/traffic-archive.yml`: a daily scheduled workflow (plus
+  manual `workflow_dispatch`) that archives GitHub's repo traffic data
+  (views/clones) to `data/traffic-history.jsonl`, since GitHub's traffic API
+  only retains 14 days of history. Requires a `TRAFFIC_PAT` repository
+  secret (fine-grained PAT, `Administration: Read-only`) — the automatic
+  `GITHUB_TOKEN` cannot be granted that permission, confirmed empirically
+  (see the workflow file's header comment).
+
 ## [0.1.0] - 2026-08-27
 
 Initial public release: a CLI that connects to an MCP server over stdio,

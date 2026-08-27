@@ -643,6 +643,16 @@ GitHub Actions workflow covering the one-time Gist/token setup and the
 exact badge Markdown to paste is at
 [`examples/github-actions/mcp-audit-badge.yml`](examples/github-actions/mcp-audit-badge.yml).
 
+## Traffic history
+
+GitHub's own traffic API (`views`/`clones`) only keeps 14 days of data before
+losing it for good. `.github/workflows/traffic-archive.yml` runs daily,
+pulls that data via the GitHub API, and appends it to
+[`data/traffic-history.jsonl`](data/traffic-history.jsonl) (one JSON line per
+run) so the project's adoption over time doesn't disappear every two weeks.
+This is server-side GitHub data about the repo itself — not telemetry from
+the CLI, which still phones home to nowhere.
+
 ## Roadmap
 
 - HTTP/SSE transport support (unlocks the transport-security check for real)
