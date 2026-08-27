@@ -1,5 +1,9 @@
 # mcp-audit
 
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+![Status: early MVP](https://img.shields.io/badge/status-early%20MVP-yellow.svg)
+
 **Detect what other MCP scanners miss.**
 
 `mcp-audit` is an open-source security scanner for [MCP](https://modelcontextprotocol.io)
@@ -289,6 +293,30 @@ actually didn't check anything is worse than one that admits the gap. Every
 Issues and PRs welcome — this is early and the check list is short on
 purpose; if you've found an MCP-specific attack class that isn't covered
 here, open an issue.
+
+## Roadmap & sustainability
+
+The CLI is MIT-licensed and stays that way — every check, the report
+format, the coverage table, all of it. That's not going to change to fund
+this project.
+
+What's planned as a separate, optional layer is a hosted service on top:
+continuous scanning wired into CI, a dashboard across a fleet of servers,
+alerting when rug-pull drift is detected, and compliance-style reports for
+teams that need to hand something to an auditor. None of that exists
+today — it's a direction, not a product, and this README will say so
+plainly if and when it ships instead of quietly assuming you'll notice.
+
+There's no GitHub Sponsors or Buy Me a Coffee link here because neither is
+set up yet, and a placeholder link that goes nowhere is worse than no
+link. If that changes, it'll show up in this section.
+
+Right now, the most useful support isn't money — it's use. Run
+`mcp-audit` against a real server, open an issue when a check misses
+something or flags a false positive, or send a PR for an attack class
+that isn't covered yet (see [Contributing](#contributing) above). At this
+stage, a good bug report is worth more to the project than a donation
+would be.
 
 ## License
 
