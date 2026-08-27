@@ -3,6 +3,8 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![Status: early MVP](https://img.shields.io/badge/status-early%20MVP-yellow.svg)
+[![tests](https://github.com/marcoslozina/mcp-audit/actions/workflows/tests.yml/badge.svg)](https://github.com/marcoslozina/mcp-audit/actions/workflows/tests.yml)
+[![smoke test](https://github.com/marcoslozina/mcp-audit/actions/workflows/smoke-test.yml/badge.svg)](https://github.com/marcoslozina/mcp-audit/actions/workflows/smoke-test.yml)
 
 **Detect what other MCP scanners miss.**
 
@@ -186,7 +188,7 @@ yourself:
 Not published to PyPI yet — this is early-stage. Clone and run from source:
 
 ```bash
-git clone https://github.com/<your-org>/mcp-audit
+git clone https://github.com/marcoslozina/mcp-audit
 cd mcp-audit
 uv sync
 ```
@@ -329,6 +331,10 @@ start command. It covers:
 Issues and PRs welcome — this is early and the check list is short on
 purpose; if you've found an MCP-specific attack class that isn't covered
 here, open an issue.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to set up the dev
+environment, run the test/lint/type-check suite locally, the commit-message
+convention, and how to implement and register a new security check.
 
 ## Roadmap & sustainability
 
