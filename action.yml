@@ -1,0 +1,169 @@
+name: 'mcp-audit scan'
+description: >-
+  Run mcp-audit (open-source MCP server security scanner) against a target
+  MCP server and gate on critical/high severity findings. Wraps
+  `mcp-audit scan --format json`, uploads the JSON report as a workflow
+  artifact, and fails the step exactly when mcp-audit itself exits non-zero.
+author: 'Marcos Lozina'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  server-command:
+    description: >-
+      Command to launch the target MCP server, e.g. "python server.py" or
+      "node dist/server.js". This is everything mcp-audit will run after its
+      own `--`. Passed through ordinary bash word-splitting — if your launch
+      command needs complex quoting, wrap it in your own shell script and
+      pass that script's path here instead.
+    required: true
+  source-dir:
+    description: >-
+      Path (relative to the repo root, which is the default working
+      directory for this action) to the target server's source code.
+      Enables mcp-audit's source-only checks: hardcoded-secrets,
+      code-injection, and path-traversal (all Python-only, all skipped
+      without this input), plus the source-level half of
+      overprivileged-scopes and resource-limits. Does NOT affect
+      tool-poisoning, cross-tool-shadowing, unicode-concealment, or
+      rug-pull-detection — those always run regardless of this input; see
+      the mcp-audit README's "Checks implemented" table.
+    required: false
+    default: ''
+  server-id:
+    description: >-
+      Stable identifier for this server, used as the rug-pull baseline key
+      (stored under ~/.mcp-audit/baselines/). Defaults to a hash of the
+      launch command if omitted. Pass an explicit, stable value and cache
+      ~/.mcp-audit/baselines/ across runs (see the "Caching the rug-pull
+      baseline" example below) if you want rug-pull drift detection to
+      actually compare against a previous run instead of just creating a
+      fresh baseline every time.
+    required: false
+    default: ''
+  update-baseline:
+    description: >-
+      Set to "true" to overwrite the stored rug-pull baseline with this
+      run's snapshot instead of comparing against it. Mirrors mcp-audit's
+      own --update-baseline flag; use only after manually confirming a
+      detected tool-definition change is legitimate — do not set this
+      unconditionally on every run, or rug-pull detection can never fire.
+    required: false
+    default: 'false'
+  report-path:
+    description: >-
+      File path (relative to the working directory) to write the JSON
+      report to.
+    required: false
+    default: 'mcp-audit-report.json'
+  python-version:
+    description: 'Python version to install for running mcp-audit.'
+    required: false
+    default: '3.11'
+  mcp-audit-ref:
+    description: >-
+      Git ref (branch, tag, or commit SHA) of marcoslozina/mcp-audit to
+      install. mcp-audit is not published to PyPI yet, so this action
+      always installs it from source via `uv tool install
+      git+https://github.com/marcoslozina/mcp-audit.git@<ref>`. IMPORTANT:
+      referencing this action itself at a tag (e.g. `uses:
+      marcoslozina/mcp-audit@v1`) does NOT automatically pin which mcp-audit
+      version gets installed — those are two separate refs. Pass an explicit
+      value here (e.g. "v1") if you need the installed CLI version pinned
+      and reproducible; the default ("main") tracks the latest commit on the
+      default branch.
+    required: false
+    default: 'main'
+
+outputs:
+  report-path:
+    description: 'Path to the JSON report file this action wrote.'
+    value: ${{ steps.scan.outputs.report-path }}
+  exit-code:
+    description: >-
+      The exit code `mcp-audit scan` returned: 0 if no critical/high
+      finding was reported, 1 if at least one was (or if the scan itself
+      failed to connect to the target server). mcp-audit does not support
+      configuring this threshold today — it is always exactly
+      critical-or-high; see the README's "Using mcp-audit in CI" section.
+    value: ${{ steps.scan.outputs.exit-code }}
+  summary:
+    description: >-
+      One-line finding counts by severity, e.g. "1 critical, 0 high, 2
+      medium, 0 low" (or "scan error: <message>" if mcp-audit could not
+      connect to the target server at all).
+    value: ${{ steps.scan.outputs.summary }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Python + uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    # mcp-audit is not on PyPI yet (early-stage project) — installed from
+    # source as an isolated uv-managed tool (uv's pipx equivalent), which
+    # puts the `mcp-audit` console script on ~/.local/bin without touching
+    # any project virtualenv. See the mcp-audit-ref input above: this ref is
+    # independent of whatever ref this action itself was invoked at.
+    - name: Install mcp-audit
+      shell: bash
+      run: |
+        uv tool install --python "${{ inputs.python-version }}" \
+          "git+https://github.com/marcoslozina/mcp-audit.git@${{ inputs.mcp-audit-ref }}"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    # `mcp-audit scan` exits 1 on any critical/high finding (or on a scan
+    # failure) and 0 otherwise — that exit code IS the CI gate, no extra
+    # logic needed for it. What this step adds on top: it disables the
+    # shell's default fail-fast (`set +e`) just long enough to capture that
+    # exit code into an output and write the summary/report-path outputs
+    # *before* re-raising it via `exit "$exit_code"` at the end — otherwise
+    # a non-zero exit here would abort the script mid-way and those outputs,
+    # along with the artifact-upload step below, would never run.
+    - name: Run mcp-audit scan
+      id: scan
+      shell: bash
+      run: |
+        args=()
+        if [ -n "${{ inputs.source-dir }}" ]; then
+          args+=(--source-dir "${{ inputs.source-dir }}")
+        fi
+        if [ -n "${{ inputs.server-id }}" ]; then
+          args+=(--server-id "${{ inputs.server-id }}")
+        fi
+        if [ "${{ inputs.update-baseline }}" = "true" ]; then
+          args+=(--update-baseline)
+        fi
+
+        set +e
+        mcp-audit scan --format json "${args[@]}" -- ${{ inputs.server-command }} \
+          > "${{ inputs.report-path }}"
+        exit_code=$?
+        set -e
+
+        if jq -e 'has("error")' "${{ inputs.report-path }}" >/dev/null 2>&1; then
+          summary="scan error: $(jq -r '.error' "${{ inputs.report-path }}")"
+        else
+          summary="$(jq -r '"\(.summary.critical) critical, \(.summary.high) high, \(.summary.medium) medium, \(.summary.low) low"' "${{ inputs.report-path }}")"
+        fi
+
+        {
+          echo "report-path=${{ inputs.report-path }}"
+          echo "exit-code=$exit_code"
+          echo "summary=$summary"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "mcp-audit: $summary (exit $exit_code)"
+        exit "$exit_code"
+
+    - name: Upload mcp-audit report
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: mcp-audit-report
+        path: ${{ inputs.report-path }}
+        retention-days: 30
