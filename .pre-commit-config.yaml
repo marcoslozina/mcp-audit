@@ -1,0 +1,74 @@
+# Local security/quality gate, run BEFORE a commit ever reaches CI.
+#
+# CI (.github/workflows/tests.yml, smoke-test.yml, plus CodeQL via GitHub's
+# default code-scanning setup) is the last line of defense, running AFTER a
+# push. This file is the first line: the same checks, cheap enough to run on
+# every commit, so a mistake never leaves this machine.
+#
+# Setup (once per checkout):
+#   uv add --dev pre-commit        # already a dev dependency; only needed on a fresh clone if the lockfile changed
+#   uv run pre-commit install                        # activates the pre-commit stage below
+#   uv run pre-commit install --hook-type pre-push    # activates the pre-push stage (pytest)
+#
+# Manual run (e.g. to check the whole repo, not just staged files):
+#   uv run pre-commit run --all-files
+#
+# NOTE for AI agents: see AGENTS.md's "Pre-commit / local safety net" section
+# — you MUST run `uv run pre-commit run --all-files` yourself before
+# proposing a commit, since a git hook only fires for a commit made through
+# git directly, not through every possible way a commit gets created.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff-check
+        name: ruff (lint)
+        stages: [pre-commit]
+      - id: ruff-format
+        name: ruff (format check)
+        args: [--check]
+        stages: [pre-commit]
+
+  # mypy via a local hook (not the ruff-pre-commit-style mirrors/hosted mypy
+  # hook): mypy needs the project's actual dependencies importable (this repo
+  # ignore-lists `mcp.*` for missing stubs — see pyproject.toml) to type-check
+  # correctly. A mirrored mypy hook runs in its own isolated environment that
+  # doesn't see mcp-audit's dependency set, which reintroduces exactly the
+  # "missing library stubs" noise the pyproject.toml override exists to
+  # avoid. Running it through `uv run` inside the project's own venv is the
+  # reliable choice here, at the cost of it not being sandboxed by
+  # pre-commit itself.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (src/)
+        entry: uv run mypy src/
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      # Full pytest suite (spawns real subprocess MCP servers over stdio) —
+      # deliberately NOT a pre-commit-stage hook, only pre-push: too slow to
+      # run on every single commit, but still local and still before code
+      # leaves this machine, which is what matters for a "before it's
+      # pushed" safety net.
+      - id: pytest
+        name: pytest (full suite)
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+  # Secret scanner for mcp-audit's OWN source code and history — distinct
+  # from `mcp-audit`'s own `secrets-hardcoded` check (src/mcp_audit/checks/secrets.py),
+  # which scans a *target* MCP server's source via --source-dir. This one
+  # protects this repo from an accidental real credential landing in a
+  # commit.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        stages: [pre-commit]
+
+default_install_hook_types: [pre-commit, pre-push]
