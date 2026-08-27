@@ -623,6 +623,111 @@ here is `0` — informational, not a hard CI gate. See
 mcp-audit can and can't see about a real multi-server shadowing attack
 from a single-server scan.
 
+## Catching plaintext HTTP and unauthenticated discovery on a remote server
+
+Everything above connects over stdio (`mcp-audit` spawning a local
+subprocess). `mcp-audit` also speaks the remote transport defined by the
+MCP spec (2025-06-18) — Streamable HTTP, the successor to the older,
+SSE-only transport from the 2024-11-05 spec — confirmed directly against
+the installed `mcp` Python SDK (pinned `>=2.1.1`), which exposes it as
+`mcp.client.streamable_http.streamable_http_client` on the client side and
+`MCPServer.run(transport="streamable-http")` on the server side. A target
+is detected as remote automatically: if what follows `--` is a single
+`http://` or `https://` URL instead of a command, `mcp-audit` connects over
+Streamable HTTP instead of stdio — no extra flag needed.
+
+This is also what unlocks `transport-security` and
+`unauthenticated-discovery` for real: both report `not_applicable` against
+a stdio target (shown throughout this README so far) and only run their
+actual logic against a remote one.
+
+`examples/toy_http_server.py` is `toy_server.py`'s exact same
+`MCPServer` app — same three tools, one resource, one prompt, unmodified —
+served over plain `http://` with no authentication configured, specifically
+so it demonstrates both checks at once:
+
+```bash
+$ uv run python examples/toy_http_server.py 8000 &
+$ uv run mcp-audit scan -- http://127.0.0.1:8000/mcp
+
+Server: toy-server (version unknown)
+Transport: http
+Server ID (rug-pull baseline key): 65eef9a2e66bb908 (auto-derived from launch
+command; pass --server-id to pin it)
+
+HIGH (2)
+  •  Server reachable over plaintext HTTP
+    location: http://127.0.0.1:8000/mcp
+    Endpoint 'http://127.0.0.1:8000/mcp' uses http:// instead of https://, so
+    traffic (including tool-call arguments, results, and any bearer token sent
+    alongside them) is unencrypted and can be read or tampered with by anyone
+    able to observe the connection.
+  •  Server exposes initialize/list_tools with no authentication
+    location: http://127.0.0.1:8000/mcp
+    mcp-audit completed the initialize/list_tools handshake against
+    'http://127.0.0.1:8000/mcp' while sending no Authorization header or any
+    other auth material, and the server handed back its full discovery surface
+    (3 tool(s), 1 resource(s), 1 prompt(s)) anyway. Anyone who finds this URL
+    can enumerate the server's complete tool/resource/prompt list, descriptions
+    included, with no credentials at all. Note: this check only verifies that
+    *no* auth header was required to complete discovery — it does not rule out
+    auth being enforced on actual tool calls, or via a scheme this probe
+    doesn't attempt (mTLS, cookies, query-string API keys).
+
+                                 Check coverage
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Check                        ┃ Status         ┃ Detail                       ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Insecure transport / missing │ RAN            │ server was inspected over    │
+│ auth (transport-security)    │                │ http at [...]; transport is  │
+│                              │                │ unencrypted (http://).       │
+│ Unauthenticated discovery    │ RAN            │ server was inspected over    │
+│ surface                      │                │ http at [...] with no auth   │
+│ (unauthenticated-discovery)  │                │ headers sent, and the        │
+│                              │                │ handshake succeeded.         │
+│ [... the other checks, unaffected by transport, listed as usual ...]        │
+└──────────────────────────────┴────────────────┴──────────────────────────────┘
+
+FAIL: 2 critical/high finding(s) (0 critical, 2 high).
+$ echo $?
+1
+```
+
+To confirm the honest, non-finding side of `unauthenticated-discovery` is
+also real and not just asserted: `examples/toy_http_server_authed.py` wraps
+that same unmodified server behind a minimal bearer-token gate (not real
+OAuth — just enough middleware to return 401 without a valid
+`Authorization` header). `mcp-audit` sends no auth headers on any HTTP
+scan, so against this server the handshake itself fails:
+
+```bash
+$ uv run python examples/toy_http_server_authed.py 8001 &
+$ uv run mcp-audit scan -- http://127.0.0.1:8001/mcp
+error: failed to inspect server: unhandled errors in a TaskGroup (1 sub-exception)
+$ echo $?
+1
+```
+
+That's the correct outcome, not a bug: mcp-audit has no CLI-level way to
+supply credentials today, so a server that legitimately requires auth
+fails the whole handshake rather than producing a false "no findings"
+pass, or a false unauthenticated-discovery finding (there's no snapshot
+for that check to even run against). A follow-up curl/SDK call with the
+right bearer token against the same server confirms it isn't just broken —
+it's correctly gated (see `tests/test_parser_http.py` for that as an
+automated assertion).
+
+**Honest limitation**: the `https://` (TLS) side of `transport-security`
+was validated as scheme-parsing logic (`endpoint_url.startswith("http://")`
+→ finding, otherwise clean — see `tests/checks/test_transport.py`) plus a
+real, unencrypted `http://` round-trip end-to-end. It was **not** also
+validated against a live TLS-terminated MCP server — standing up a
+throwaway self-signed cert for `uvicorn` would have been a bounded amount
+of extra work, but it doesn't exercise any different code in
+`mcp-audit` itself (the check only reads the URL scheme mcp-audit already
+resolved; TLS termination itself is `httpx`/`uvicorn`'s job, not
+mcp-audit's), so it wasn't judged worth the extra setup for this pass.
+
 ## Install
 
 Not published to PyPI yet — this is early-stage. Clone and run from source:
@@ -637,10 +742,35 @@ uv sync
 
 ## Usage
 
+### Local (stdio) or remote (HTTP) target
+
+Everything below works against either kind of target, passed after `--`:
+
+- A **stdio** command: `python path/to/target_server.py` (or any other way
+  to launch the server as a local subprocess) — spawns it and talks
+  JSON-RPC over its pipes, exactly as `mcp-audit` always has.
+- A single **http:// or https:// URL**: `https://example.com/mcp` —
+  connects to it as a remote MCP server over Streamable HTTP (the MCP
+  spec's 2025-06-18 remote transport). Detected automatically from the
+  string itself, no extra flag needed. A URL target takes no extra
+  arguments after it — unlike a subprocess command, a remote endpoint has
+  no notion of trailing positional args, so `mcp-audit` rejects that as a
+  usage error instead of silently ignoring the extra tokens.
+
+`transport-security` and `unauthenticated-discovery` only run their real
+logic against a remote target — see [Catching plaintext HTTP and
+unauthenticated discovery on a remote
+server](#catching-plaintext-http-and-unauthenticated-discovery-on-a-remote-server)
+above. mcp-audit sends no auth headers on an HTTP connection today, so
+scanning a server that legitimately requires auth will fail the handshake
+entirely rather than produce findings — see that same section for why
+that's the expected outcome, not a bug.
+
 ### Inspect a server's capability surface
 
 ```bash
 uv run mcp-audit inspect -- python path/to/target_server.py
+uv run mcp-audit inspect -- https://example.com/mcp
 ```
 
 Prints the target's tools, resources, and prompts. No security checks —
@@ -651,6 +781,7 @@ this is the raw parsing output, useful for sanity-checking that
 
 ```bash
 uv run mcp-audit scan -- python path/to/target_server.py
+uv run mcp-audit scan -- https://example.com/mcp
 ```
 
 Runs all checks and prints a report: findings grouped by severity, then a
@@ -713,7 +844,8 @@ read the warning rather than assuming silence means it worked.
 | **Overprivileged scopes** | A tool declaring or using broader access than its name/description implies — the "excessive permission scope" class (DVMCP's Challenge 3 is the canonical example: a `read_file` tool described as reading "a file from the public directory" that actually accepts any path). Two independent levels: protocol-level (always runs — a scope-narrowing description paired with an unconstrained resource-locator parameter, or schema parameters spanning multiple privilege categories the description doesn't mention) and source-level (`--source-dir` — a handler importing/calling a high-privilege primitive, e.g. `subprocess`, raw sockets, arbitrary HTTP, filesystem writes, that its name/docstring never mentions). **Heuristic at both levels** — naming and schema shape are conventions, not enforcement; see `checks/overprivileged_scopes.py`'s docstring. | Protocol-level always runs; source-level also runs with `--source-dir`, **Python source only** |
 | **Resource limits** | Whether anything limits how often an agent can call a tool — without this, an agent can call a tool without bound (DoS, or unbounded spend against a paid third-party API). Protocol level was checked directly against the MCP spec (2025-06-18), not assumed: **there is no standardized mechanism for a server to declare a rate limit, quota, or budget today** — the spec mandates ("MUST rate limit tool invocations") without giving servers any structured way to declare compliance, so this reports honestly as not applicable, the same posture as `transport-security` for stdio. Source level (`--source-dir`) looks for known rate-limiting libraries/decorators (`slowapi`, `flask-limiter`, `aiolimiter`, etc.) and flags handlers calling external APIs/subprocesses when none are found anywhere in the file. **Low-confidence by design** — absence of a recognized marker is not proof of absence of a limit (it could be enforced by a gateway, proxy, or platform this check can't see). | Protocol-level: not applicable (structural gap in the MCP ecosystem); source-level also runs with `--source-dir`, **Python source only** |
 | **Rug-pull detection** | A tool's description or input schema changing after a user already approved it, by comparing against a saved baseline in `~/.mcp-audit/baselines/`. New tools flagged as medium/informational, removed tools as low/informational, changed tools as high. | Always runs (creates baseline on first run) |
-| **Transport security** | Plaintext HTTP / missing declared auth on the server's transport. | **Honestly not applicable today** — `mcp-audit` currently only speaks stdio (local subprocess pipes), which has no transport-security question to answer. The check is structured to activate automatically once HTTP/SSE support lands. |
+| **Transport security** | Plaintext HTTP on a remote server's transport — traffic (tool-call arguments, results, any bearer token alongside them) sent unencrypted, readable/tamperable by anyone able to observe the connection. `https://` passes clean; `http://` is a `high` finding. | Runs for a remote (`http://`/`https://`) target; **not applicable to stdio** (a local subprocess pipe has no transport to secure) |
+| **Unauthenticated discovery surface** | Whether a remote server hands its full `initialize`/`list_tools` surface (every tool/resource/prompt, descriptions included) to a caller sending zero auth headers — a distinct risk from `transport-security`: an `https://` endpoint can still leak its entire surface to anyone who finds the URL. **Only proves "no auth header was required for discovery"**, not "this server has no authentication at all" — it can't rule out auth being enforced on actual tool *calls*, or a non-header auth scheme (mTLS, cookies, query-string API keys); see `checks/unauthenticated_discovery.py`'s module docstring. | Runs for a remote (`http://`/`https://`) target; **not applicable to stdio** (no remote discovery handshake to gate) |
 
 That last row is deliberate: a security tool that reports "passed" when it
 actually didn't check anything is worse than one that admits the gap. Every
@@ -843,15 +975,17 @@ the CLI, which still phones home to nowhere.
 
 ## Roadmap
 
-- HTTP/SSE transport support (unlocks the transport-security check for real)
-- Unauthenticated discovery-surface check for remote transports: whether a
-  server hands out `initialize`/`list_tools` (full tool/resource/prompt
-  list, descriptions included) to anyone who reaches the URL, before any
-  auth step. This is a distinct risk from `transport-security` (which only
-  verifies the transport is encrypted) — encrypted-but-unauthenticated still
-  leaks the entire server surface to whoever finds the URL. Not applicable
-  today since stdio has no such handshake; blocked on the item above
-  (surfaced via community feedback on r/mcp)
+Shipped: remote (HTTP) transport support and the two checks it unlocked —
+`transport-security` for real (plaintext-HTTP detection against a live
+endpoint) and `unauthenticated-discovery` (whether a server hands out
+`initialize`/`list_tools` to a caller sending zero auth headers), the
+latter first raised via community feedback on r/mcp. See [Catching
+plaintext HTTP and unauthenticated discovery on a remote
+server](#catching-plaintext-http-and-unauthenticated-discovery-on-a-remote-server)
+above and the `[Unreleased]` section of `CHANGELOG.md` for the full detail.
+
+Still ahead:
+
 - Integration with the official MCP registry (scan-on-publish / scan-on-list)
 - Hosted dashboard: fleet-wide scanning, scheduled re-scans, Slack/email
   alerting on drift (the paid layer of the open-core model)

@@ -14,10 +14,12 @@ inputs:
   server-command:
     description: >-
       Command to launch the target MCP server, e.g. "python server.py" or
-      "node dist/server.js". This is everything mcp-audit will run after its
-      own `--`. Passed through ordinary bash word-splitting — if your launch
-      command needs complex quoting, wrap it in your own shell script and
-      pass that script's path here instead.
+      "node dist/server.js" — or a single http:// or https:// URL (e.g.
+      "https://example.com/mcp") to scan a remote server over Streamable
+      HTTP instead, detected automatically. This is everything mcp-audit
+      will run after its own `--`. Passed through ordinary bash
+      word-splitting — if your launch command needs complex quoting, wrap
+      it in your own shell script and pass that script's path here instead.
     required: true
   source-dir:
     description: >-

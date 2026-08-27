@@ -7,10 +7,19 @@ convention — plain Markdown, no rigid schema, read it before touching code.
 ## What this project is
 
 `mcp-audit` is a security scanner for MCP (Model Context Protocol) servers.
-It connects to a target server the same way an AI client would (currently
-stdio only), inspects what it exposes (tools/resources/prompts), and runs
-checks against that snapshot. See `README.md` for the product pitch — this
-file is about how to work in the codebase, not what it does for users.
+It connects to a target server the same way an AI client would — over
+stdio (local subprocess) or, for a remote target, over Streamable HTTP
+(the MCP spec's 2025-06-18 remote transport) — inspects what it exposes
+(tools/resources/prompts), and runs checks against that snapshot. See
+`README.md` for the product pitch — this file is about how to work in the
+codebase, not what it does for users.
+
+`src/mcp_audit/parser.py`'s `inspect_target`/`inspect_target_sync` are the
+single entry point the CLI uses: they dispatch to `inspect_server`
+(stdio) or `inspect_http_server` (http) based on whether the target string
+looks like an `http://`/`https://` URL (`is_url_target`). Don't call
+`inspect_server`/`inspect_http_server` directly from CLI code — go through
+`inspect_target` so a target's transport is resolved in exactly one place.
 
 ## Setup
 
@@ -109,6 +118,24 @@ don't rely on it catching every case — get the order right instead.
   end-to-end, no `--source-dir` needed. `search_files` itself must not
   produce a finding (it's the correct, official name); only the
   near-duplicates should.
+- `examples/toy_http_server.py` — imports the exact same `MCPServer` app
+  object as `toy_server.py` and serves it over Streamable HTTP
+  (`transport="streamable-http"`) with no auth configured, instead of
+  stdio. Takes an optional port as `argv[1]` (default 8000). Exercises the
+  parser's HTTP path (`inspect_http_server`) end-to-end, and is what
+  `transport-security`/`unauthenticated-discovery` are demoed against — it
+  should always produce exactly those two `high` findings and nothing
+  else, since the tool/resource/prompt definitions are identical to
+  `toy_server.py`'s clean baseline.
+  ```bash
+  uv run mcp-audit scan -- http://127.0.0.1:8000/mcp   # after starting the server above
+  ```
+- `examples/toy_http_server_authed.py` — same server, wrapped in a minimal
+  bearer-token-gate ASGI middleware (not real OAuth — see the module
+  docstring). Used to prove the *other* branch of
+  `unauthenticated-discovery`: since mcp-audit sends no auth headers on an
+  HTTP scan, connecting here must fail the whole handshake (a connection
+  error, not a false "no findings" pass and not a spurious finding).
 
 ## Known SDK gotchas (things we already got burned by)
 
@@ -124,7 +151,31 @@ project's development. Don't repeat them.
    JSON key you see in a protocol trace, and don't assume it matches
    whatever a different mcp SDK version once used.
 
-2. **An f-string is not a valid docstring / doesn't populate `__doc__`.**
+2. **The `mcp` SDK's remote transport is Streamable HTTP, not SSE.** The
+   MCP spec (2025-06-18) replaced the older 2024-11-05 HTTP+SSE transport
+   with Streamable HTTP as the recommended remote transport. The installed
+   `mcp` SDK (`>=2.1.1`) implements both: `mcp.client.streamable_http` /
+   `MCPServer.run(transport="streamable-http")` for the current spec, and
+   `mcp.client.sse` for the legacy one. `mcp-audit`'s HTTP support
+   (`parser.inspect_http_server`) uses Streamable HTTP exclusively — if you
+   ever need to add legacy SSE support, it's a separate client module, not
+   a mode of the same one. Also: `streamable_http_client(url)` yields a
+   2-tuple `(read_stream, write_stream)`, same shape as `stdio_client` —
+   don't assume a 3rd "session id" element from older docs/blog posts you
+   might find; check the installed version's actual signature.
+
+3. **`httpx` is `httpx2` in this environment.** The installed `mcp` SDK
+   depends on `httpx2` (a drop-in-API-compatible successor package), not
+   `httpx` — `import httpx` fails outright. `mcp_audit.parser` avoids
+   depending on it directly (it never needs to build a custom HTTP client,
+   since `inspect_http_server` intentionally sends zero headers — see that
+   function's docstring); if you ever do need one, import via
+   `mcp.shared._httpx_utils.create_mcp_http_client` rather than importing
+   `httpx2` directly, both to reuse the SDK's own recommended timeouts and
+   to avoid adding a new direct dependency + mypy override for a package
+   name that has already changed once.
+
+4. **An f-string is not a valid docstring / doesn't populate `__doc__`.**
    A docstring must be a literal, compile-time constant — Python only wires
    up `__doc__` when the first statement of a function/module is a plain
    string literal, not an f-string (which is evaluated at runtime and is

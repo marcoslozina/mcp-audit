@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote (HTTP) transport support**: `mcp-audit inspect`/`scan`/`badge`
+  now accept a single `http://` or `https://` URL after `--`, in addition
+  to the existing stdio launch-command form, detected automatically from
+  the target string (`mcp_audit.parser.is_url_target`). Connects using
+  Streamable HTTP, the remote transport defined by the MCP spec
+  (2025-06-18, replacing the older 2024-11-05 HTTP+SSE transport),
+  confirmed directly against the installed `mcp` SDK (`>=2.1.1`) rather
+  than assumed. `ServerSnapshot` gained an `endpoint_url` field recording
+  the exact URL connected to (scheme included), alongside the existing
+  `transport` field now taking the value `"http"` for a remote target.
+  mcp-audit sends no auth headers of any kind on an HTTP connection today
+  — a server that requires auth will fail the whole handshake rather than
+  return a snapshot; see the two checks below for why that's intentional.
+  New fixtures: `examples/toy_http_server.py` (the same clean server as
+  `toy_server.py`, served over plain HTTP with no auth) and
+  `examples/toy_http_server_authed.py` (same server, gated behind a
+  minimal bearer-token check, to exercise the "auth correctly rejected"
+  path end-to-end).
+- **transport-security** check now runs for real against a remote target
+  instead of always reporting `not_applicable`: `https://` passes clean,
+  `http://` is a `high` finding (plaintext transport — tool-call
+  arguments, results, and any bearer token sent alongside them are
+  readable/tamperable by anyone able to observe the connection). Still
+  `not_applicable` for stdio, which has no transport to secure.
+- **unauthenticated-discovery** check (new): whether a remote server hands
+  out its full `initialize`/`list_tools` surface (every tool/resource/
+  prompt, descriptions included) to a caller sending zero auth headers —
+  a distinct risk from `transport-security`, since an `https://` endpoint
+  can still leak its entire surface to anyone who finds the URL. Reports a
+  `high` finding whenever a snapshot exists for an HTTP target (which, by
+  construction, only happens when the handshake already succeeded with no
+  auth material sent); `not_applicable` for stdio. Explicitly does not
+  claim to verify every possible auth scheme — only "did discovery require
+  *some* auth header" — see the check's module docstring. First raised via
+  community feedback on r/mcp; was blocked on remote transport support
+  landing first.
 - **tool-poisoning** check: heuristic detection of plain, visible
   prompt-injection instructions in tool/resource/prompt descriptions
   (prompt-override directives, model-directed concealment instructions,
