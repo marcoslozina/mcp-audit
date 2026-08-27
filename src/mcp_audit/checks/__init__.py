@@ -15,6 +15,8 @@ the CLI doesn't need to import from the submodule directly.
 from __future__ import annotations
 
 from mcp_audit.checks.base import Check, CheckOutcome, Finding, Severity
+from mcp_audit.checks.code_injection import CodeInjectionCheck
+from mcp_audit.checks.path_traversal import PathTraversalCheck
 from mcp_audit.checks.rug_pull import (
     DEFAULT_BASELINE_DIR,
     RugPullCheck,
@@ -27,6 +29,8 @@ from mcp_audit.checks.unicode_concealment import UnicodeConcealmentCheck
 ALL_CHECKS: list[Check] = [
     UnicodeConcealmentCheck(),
     SecretsCheck(),
+    CodeInjectionCheck(),
+    PathTraversalCheck(),
     TransportCheck(),
 ]
 

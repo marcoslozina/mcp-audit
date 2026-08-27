@@ -287,6 +287,112 @@ byte match for the format `secrets-hardcoded` looks for). A scanner that
 blurred that distinction to make a better demo would be doing exactly
 what this project's coverage table exists to prevent.
 
+## Catching command injection and path traversal in the same lab
+
+The class of bug behind real MCP CVEs — including three in the official
+Git MCP server — is command injection and path traversal, not hardcoded
+secrets. `code-injection` and `path-traversal` exist specifically to close
+that gap, so we ran them against two more DVMCP challenges built to
+exercise exactly those bug classes: "Challenge 9 - Remote Access Control"
+(command injection) and "Challenge 3 - Excessive Permission Scope" (path
+traversal). Same setup as the challenge 4 run above (own `mcp<2` venv,
+`run_stdio.py` wrapper importing the challenge's unmodified `FastMCP` app):
+
+```
+$ uv run mcp-audit scan \
+    --source-dir damn-vulnerable-MCP-server/challenges/hard/challenge9 \
+    --server-id dvmcp-challenge9 \
+    -- damn-vulnerable-MCP-server/.venv-dvmcp/bin/python \
+       damn-vulnerable-MCP-server/challenges/hard/challenge9/run_stdio.py
+
+Server: Challenge 9 - Remote Access Control (version 1.29.1)
+Transport: stdio
+
+CRITICAL (4)
+  •  subprocess call with shell=True (B602)
+    location: .../challenges/hard/challenge9/server.py:55
+    subprocess call with shell=True identified, security issue.
+  •  subprocess call with shell=True (B602)
+    location: .../challenges/hard/challenge9/server.py:88
+  •  subprocess call with shell=True (B602)
+    location: .../challenges/hard/challenge9/server.py:127
+  •  subprocess call with shell=True (B602)
+    location: .../challenges/hard/challenge9/server.py:189
+
+HIGH (1)
+  •  Potential path traversal in handler 'view_network_logs'
+    location: .../challenges/hard/challenge9/server.py:230
+    Handler 'view_network_logs' passes parameter(s) ['log_path'] into a
+    file-open call with no visible sanitization [...]
+
+FAIL: 5 critical/high finding(s) (4 critical, 1 high).
+$ echo $?
+1
+```
+
+The four `code-injection` hits are real: all four of challenge 9's tools
+(`ping_host`, `traceroute`, `port_scan`, `network_diagnostic`) build a shell
+command with an f-string from a tool parameter and run it via
+`subprocess.check_output(command, shell=True)` — textbook command
+injection, correctly flagged critical.
+
+The `path-traversal` hit is a **known false positive**, and it's worth
+showing rather than hiding: `view_network_logs` takes a `log_type`
+parameter and looks it up in a fixed dict (`log_files[log_type]`) before
+opening the result — the actual value that reaches `open()` is always one
+of four hardcoded paths, not attacker-controlled. `path-traversal`'s
+single-pass heuristic taint tracker doesn't distinguish "used as a dict
+key into an allowlist" from "used to build the path directly"; it sees
+`log_type` referenced in the expression that produces the opened path and
+flags it. This is exactly the false-positive class documented in
+`checks/path_traversal.py`'s module docstring — a human reviewing this
+finding would dismiss it in seconds, which is the intended failure mode
+for a heuristic check: wrong sometimes, but legibly wrong, not silently
+overconfident.
+
+Against "Challenge 3 - Excessive Permission Scope" — whose `read_file` tool
+takes a `filename` argument and passes it straight to `open()` with no path
+validation — the same check catches the real thing:
+
+```
+$ uv run mcp-audit scan \
+    --source-dir damn-vulnerable-MCP-server/challenges/easy/challenge3 \
+    --server-id dvmcp-challenge3 \
+    -- damn-vulnerable-MCP-server/.venv-dvmcp/bin/python \
+       damn-vulnerable-MCP-server/challenges/easy/challenge3/run_stdio.py
+
+Server: Challenge 3 - Excessive Permission Scope (version 1.29.1)
+Transport: stdio
+
+HIGH (5)
+  •  Potential path traversal in handler 'read_file'
+    location: .../challenges/easy/challenge3/server.py:94
+    Handler 'read_file' passes parameter(s) ['filename'] into a file-open
+    call with no visible sanitization [...] A caller could supply a value
+    like '../../etc/passwd' to read or write outside the intended directory.
+  •  Potential path traversal in handler 'read_file'
+    location: .../challenges/easy/challenge3/server.py:99
+  •  Potential path traversal in handler 'file_manager'
+    location: .../challenges/easy/challenge3/server_sse.py:29
+  •  Potential path traversal in handler 'file_manager'
+    location: .../challenges/easy/challenge3/server_sse.py:35
+  •  Potential path traversal in handler 'get_public_file'
+    location: .../challenges/easy/challenge3/server_sse.py:59
+
+FAIL: 5 critical/high finding(s) (0 critical, 5 high).
+$ echo $?
+1
+```
+
+Five hits, not one, because `--source-dir` scans every `.py` file under the
+challenge directory, not just the one actually launched over stdio — it
+also caught the same unsanitized pattern in `server_sse.py`, an alternate
+transport variant of the same challenge that was never started for this
+scan. That's a direct consequence of this check's scope: it reads source,
+not runtime behavior, so it sees code paths a protocol-level check never
+could — and also why it's honest about being Python-only (see the "Checks
+implemented" table above).
+
 ## Install
 
 Not published to PyPI yet — this is early-stage. Clone and run from source:
@@ -370,13 +476,19 @@ read the warning rather than assuming silence means it worked.
 |---|---|---|
 | **Unicode concealment** ⭐ | Payloads hidden in tool/resource/prompt descriptions via the Unicode TAG block or invisible/bidi-override characters — invisible to a human approving the tool, fully readable by an LLM tokenizer. This is `mcp-audit`'s differentiator: few if any other MCP scanners check for it today. | Always runs |
 | **Hardcoded secrets** | Vendor API key formats (AWS, OpenAI, Google, GitHub, Slack, private keys), secret-like variable assignments, and high-entropy string literals in the server's source. | Runs only with `--source-dir` (requires source access `tools/list` can't provide) |
+| **Code / command injection** | `subprocess`/`os.system` calls run with `shell=True`, `eval`/`exec`, and SQL queries built via string concatenation/f-strings — the exact bug class behind real MCP CVEs (including in the official Git MCP server) and behind published audits finding every official reference server vulnerable. Implemented on top of [`bandit`](https://github.com/PyCQA/bandit), Python's standard security linter, via its Python API — not hand-rolled regex, see `checks/code_injection.py` for why. | Runs only with `--source-dir`, **Python source only** (bandit doesn't understand other languages) |
+| **Path traversal** | An MCP tool/resource handler passing an input parameter (directly, or through a locally-built path) into `open()` with no visible sanitization (no `os.path.realpath`/`Path.resolve()` + prefix check, or similar). Purpose-built AST check — bandit has no dedicated path-traversal rule, since answering "is this value attacker-controlled MCP input" needs to know which functions are MCP handlers, not just generic taint analysis. **Heuristic, with known false positives and false negatives** — single-pass, intraprocedural, no cross-function tracking; see `checks/path_traversal.py`'s docstring and the DVMCP demo below for a real example of each. | Runs only with `--source-dir`, **Python source only** |
 | **Rug-pull detection** | A tool's description or input schema changing after a user already approved it, by comparing against a saved baseline in `~/.mcp-audit/baselines/`. New tools flagged as medium/informational, removed tools as low/informational, changed tools as high. | Always runs (creates baseline on first run) |
 | **Transport security** | Plaintext HTTP / missing declared auth on the server's transport. | **Honestly not applicable today** — `mcp-audit` currently only speaks stdio (local subprocess pipes), which has no transport-security question to answer. The check is structured to activate automatically once HTTP/SSE support lands. |
 
 That last row is deliberate: a security tool that reports "passed" when it
 actually didn't check anything is worse than one that admits the gap. Every
 `scan` run ends with a coverage table making this explicit — `ran` vs.
-`skipped` vs. `not applicable`, with a reason for each.
+`skipped` vs. `not applicable`, with a reason for each. The two source-code
+checks go further than "not applicable to stdio": if `--source-dir` points
+at a directory with zero `.py` files, they report `not_applicable` with the
+exact reason ("Python only, today") instead of quietly returning "no
+findings" for a codebase they never actually looked at.
 
 ## Using mcp-audit in CI
 
@@ -454,6 +566,7 @@ exact badge Markdown to paste is at
 - Python 3.11+
 - [`mcp`](https://github.com/modelcontextprotocol/python-sdk) — the official Python MCP SDK
 - [`rich`](https://github.com/Textualize/rich) — terminal output
+- [`bandit`](https://github.com/PyCQA/bandit) — powers the `code-injection` check
 
 ## Contributing
 

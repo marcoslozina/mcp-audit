@@ -84,6 +84,13 @@ don't rely on it catching every case — get the order right instead.
   ```bash
   uv run mcp-audit scan --source-dir examples -- python examples/toy_server.py
   ```
+- `examples/vulnerable_command.py` — fixture with a `shell=True` command
+  built from an f-string, used to exercise `CodeInjectionCheck` (bandit-backed)
+  via `--source-dir`. Not run as a server, only scanned as source.
+- `examples/vulnerable_path_traversal.py` — fixture with a fake `@mcp.tool()`
+  handler that joins a parameter into a path and opens it with no
+  realpath/resolve check, used to exercise `PathTraversalCheck` via
+  `--source-dir`. Only ever parsed via `ast`, never imported/executed.
 
 ## Known SDK gotchas (things we already got burned by)
 

@@ -18,6 +18,7 @@ keywords = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "bandit>=1.9.4",
     "click>=8.5.0",
     "mcp>=2.1.1",
     "rich>=13.7.0",
@@ -77,4 +78,10 @@ no_implicit_optional = true
 # own code.
 [[tool.mypy.overrides]]
 module = "mcp.*"
+ignore_missing_imports = true
+
+# Same reasoning as the `mcp.*` override above, for bandit (used by
+# CodeInjectionCheck) — no py.typed marker / inline type info shipped.
+[[tool.mypy.overrides]]
+module = "bandit.*"
 ignore_missing_imports = true
