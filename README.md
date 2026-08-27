@@ -384,9 +384,10 @@ teams that need to hand something to an auditor. None of that exists
 today — it's a direction, not a product, and this README will say so
 plainly if and when it ships instead of quietly assuming you'll notice.
 
-There's no GitHub Sponsors or Buy Me a Coffee link here because neither is
-set up yet, and a placeholder link that goes nowhere is worse than no
-link. If that changes, it'll show up in this section.
+If you want to support the project directly:
+[Buy Me a Coffee](https://buymeacoffee.com/codefuel) is set up and active.
+GitHub Sponsors is in the process of being approved and isn't active yet —
+this section will say so plainly once it is.
 
 Right now, the most useful support isn't money — it's use. Run
 `mcp-audit` against a real server, open an issue when a check misses
