@@ -29,6 +29,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # This is setup for the TARGET server being scanned, not for
+      # mcp-audit itself (the action installs mcp-audit in its own
+      # isolated uv tool environment). examples/toy_server.py imports the
+      # `mcp` SDK, so plain `python` on PATH needs it installed — exactly
+      # what a real consumer repo would already have done for their own
+      # server before this action runs.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install target server dependencies
+        run: pip install "mcp>=2.1.1"
+
       - name: Run mcp-audit action against toy_server.py (expected clean)
         id: audit
         uses: ./
@@ -52,6 +66,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same reason as clean-server's equivalent step: evil_server.py also
+      # imports the `mcp` SDK to run as a server at all.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install target server dependencies
+        run: pip install "mcp>=2.1.1"
 
       - name: Run mcp-audit action against evil_server.py (expected to fail)
         id: audit
