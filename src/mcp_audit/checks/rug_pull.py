@@ -24,7 +24,11 @@ Design:
     target servers from wherever the operator happens to be running the CLI,
     and a baseline keyed to "this server I've approved" should survive the
     operator's cwd changing, not live inside whatever directory they
-    happened to be standing in the first time they ran a scan.
+    happened to be standing in the first time they ran a scan. This default
+    can be overridden with the `MCP_AUDIT_BASELINE_DIR` env var (see
+    `_resolve_default_baseline_dir`) or the `baseline_dir` constructor
+    argument — chiefly so the test suite never touches a real user's home
+    directory.
   - Only tool definitions (name + description + input_schema) are
     fingerprinted and diffed today. Resources/prompts can drift the same way
     in principle, but tools are where MCP's actual attack surface lives
@@ -56,8 +60,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -66,8 +71,37 @@ from mcp_audit.parser import ServerSnapshot, ToolInfo
 
 CHECK_ID = "rug-pull-detection"
 
-# Home-directory, not project-local: see module docstring for why.
+# Env var name a caller (chiefly: the test suite) can set to override where
+# baselines are read/written, instead of the real user's home directory.
+# Without this, running the test suite would read and write JSON files under
+# the real ~/.mcp-audit/baselines of whoever runs `pytest` — a test
+# isolation bug (and, more generally, a test suite should never touch the
+# real system of the person running it). Production behavior is unaffected
+# unless this is explicitly set.
+_BASELINE_DIR_ENV_VAR = "MCP_AUDIT_BASELINE_DIR"
+
+# Home-directory, not project-local: see module docstring for why. Computed
+# once at import time for display/backward-compat purposes (e.g. anything
+# that imports this constant directly); RugPullCheck itself re-resolves the
+# default at construction time via `_resolve_default_baseline_dir()` below,
+# so tests can override it per-run (e.g. via monkeypatch.setenv) without
+# needing to reload this module.
 DEFAULT_BASELINE_DIR = Path.home() / ".mcp-audit" / "baselines"
+
+
+def _resolve_default_baseline_dir() -> Path:
+    """Resolve the baseline directory to use when the caller didn't pass one
+    explicitly.
+
+    Honors `MCP_AUDIT_BASELINE_DIR` if set (test suites / advanced use),
+    falling back to the real `~/.mcp-audit/baselines` otherwise. Checked at
+    `RugPullCheck.__init__` time rather than only once at import, so this
+    works regardless of import order.
+    """
+    override = os.environ.get(_BASELINE_DIR_ENV_VAR)
+    if override:
+        return Path(override)
+    return DEFAULT_BASELINE_DIR
 
 
 def compute_default_server_id(command: str, args: list[str]) -> str:
@@ -102,7 +136,7 @@ class _ToolFingerprint:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "_ToolFingerprint":
+    def from_dict(cls, data: dict[str, Any]) -> _ToolFingerprint:
         return cls(
             name=data["name"],
             description=data.get("description"),
@@ -110,7 +144,7 @@ class _ToolFingerprint:
         )
 
     @classmethod
-    def from_tool(cls, tool: ToolInfo) -> "_ToolFingerprint":
+    def from_tool(cls, tool: ToolInfo) -> _ToolFingerprint:
         return cls(name=tool.name, description=tool.description, input_schema=tool.input_schema or {})
 
 
@@ -136,7 +170,7 @@ class RugPullCheck(Check):
         update_baseline: bool = False,
     ) -> None:
         self.server_id = server_id
-        self.baseline_dir = Path(baseline_dir) if baseline_dir else DEFAULT_BASELINE_DIR
+        self.baseline_dir = Path(baseline_dir) if baseline_dir else _resolve_default_baseline_dir()
         self.update_baseline = update_baseline
 
     def _baseline_path(self) -> Path:
@@ -146,7 +180,7 @@ class RugPullCheck(Check):
         self, path: Path, snapshot: ServerSnapshot, tools: list[_ToolFingerprint]
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         created_at = now
         if path.exists():
             try:
