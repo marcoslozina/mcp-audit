@@ -1,0 +1,48 @@
+# Minimal CI for mcp-audit itself (not the consumer example — see
+# examples/github-actions/mcp-audit-ci.yml for that).
+#
+# This is a smoke test, not a full test suite: it just confirms the CLI
+# still runs end-to-end against the example servers shipped in this repo
+# after every change.
+#   - toy_server.py is expected to pass cleanly (exit 0).
+#   - evil_server.py is deliberately malicious (Unicode-concealment payload)
+#     and is expected to be CAUGHT, i.e. mcp-audit must exit 1 against it.
+#     A passing scan against evil_server.py would mean the detector broke.
+
+name: smoke test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Scan toy_server.py (expected clean)
+        run: uv run mcp-audit scan -- python examples/toy_server.py
+
+      - name: Scan evil_server.py (expected to be caught)
+        run: |
+          if uv run mcp-audit scan -- python examples/evil_server.py; then
+            echo "::error::evil_server.py was NOT flagged — unicode-concealment detector may be broken"
+            exit 1
+          else
+            echo "evil_server.py correctly flagged (non-zero exit) — detector working"
+          fi
