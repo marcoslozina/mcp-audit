@@ -8,6 +8,11 @@
 #   - evil_server.py is deliberately malicious (Unicode-concealment payload)
 #     and is expected to be CAUGHT, i.e. mcp-audit must exit 1 against it.
 #     A passing scan against evil_server.py would mean the detector broke.
+#   - toy_http_server.py is the same clean server as toy_server.py, but
+#     served over plaintext HTTP with no auth — expected to be CAUGHT
+#     (transport-security + unauthenticated-discovery), proving the remote
+#     transport actually connects and those checks actually run in CI, not
+#     just locally.
 
 name: smoke test
 
@@ -45,4 +50,24 @@ jobs:
             exit 1
           else
             echo "evil_server.py correctly flagged (non-zero exit) — detector working"
+          fi
+
+      - name: Scan toy_http_server.py over HTTP (expected to be caught)
+        run: |
+          uv run python examples/toy_http_server.py 8765 &
+          SERVER_PID=$!
+          for i in $(seq 1 50); do
+            if (echo > /dev/tcp/127.0.0.1/8765) 2>/dev/null; then break; fi
+            sleep 0.2
+          done
+          set +e
+          uv run mcp-audit scan -- http://127.0.0.1:8765/mcp
+          SCAN_EXIT=$?
+          kill "$SERVER_PID" 2>/dev/null
+          set -e
+          if [ "$SCAN_EXIT" -eq 0 ]; then
+            echo "::error::toy_http_server.py (plaintext, no auth) was NOT flagged — transport-security/unauthenticated-discovery may be broken"
+            exit 1
+          else
+            echo "toy_http_server.py correctly flagged (non-zero exit) — HTTP transport checks working"
           fi
