@@ -13,7 +13,7 @@ from pathlib import Path
 
 import click
 
-from mcp_audit.checks import ALL_CHECKS, CheckOutcome, Finding
+from mcp_audit.checks import ALL_CHECKS, CheckOutcome, Finding, RugPullCheck, compute_default_server_id
 from mcp_audit.parser import ServerSnapshot, inspect_server_sync
 
 _SEVERITY_ORDER = ["critical", "high", "medium", "low"]
@@ -127,7 +127,30 @@ def _print_findings_by_severity(findings: list[Finding]) -> None:
     default=None,
     help="Path to the target server's source code, to enable the hardcoded-secrets check.",
 )
-def scan(server_command: tuple[str, ...], source_dir: Path | None) -> None:
+@click.option(
+    "--server-id",
+    default=None,
+    help=(
+        "Stable identifier for this server, used as the rug-pull baseline key. "
+        "Defaults to a hash of the launch command if omitted — pass an explicit "
+        "value if you expect the command/args to change across runs of the same server."
+    ),
+)
+@click.option(
+    "--update-baseline",
+    is_flag=True,
+    default=False,
+    help=(
+        "Overwrite the stored rug-pull baseline with this run's snapshot instead "
+        "of comparing against it. Use after confirming a detected change is legitimate."
+    ),
+)
+def scan(
+    server_command: tuple[str, ...],
+    source_dir: Path | None,
+    server_id: str | None,
+    update_baseline: bool,
+) -> None:
     """Connect to a target MCP server, run all security checks, and print a report.
 
     Pass the command to launch the target server after `--`, e.g.:
@@ -135,6 +158,10 @@ def scan(server_command: tuple[str, ...], source_dir: Path | None) -> None:
         mcp-audit scan -- python examples/toy_server.py
 
         mcp-audit scan --source-dir examples/ -- python examples/toy_server.py
+
+        mcp-audit scan --server-id my-toy-server -- python examples/toy_server.py
+
+        mcp-audit scan --server-id my-toy-server --update-baseline -- python examples/toy_server.py
     """
     command_parts = list(server_command)
     if not command_parts:
@@ -152,13 +179,22 @@ def scan(server_command: tuple[str, ...], source_dir: Path | None) -> None:
         click.echo(f"error: failed to inspect server: {exc}", err=True)
         sys.exit(1)
 
+    resolved_server_id = server_id or compute_default_server_id(command, args)
+
     click.echo(f"Server: {snapshot.server_name} (version {snapshot.server_version or 'unknown'})")
     click.echo(f"Transport: {snapshot.transport}")
+    click.echo(
+        f"Server ID (rug-pull baseline key): {resolved_server_id}"
+        + ("" if server_id else " (auto-derived from launch command; pass --server-id to pin it)")
+    )
     click.echo()
+
+    rug_pull_check = RugPullCheck(server_id=resolved_server_id, update_baseline=update_baseline)
+    checks_to_run: list = [*ALL_CHECKS, rug_pull_check]
 
     click.echo("Checks:")
     all_findings: list[Finding] = []
-    for check in ALL_CHECKS:
+    for check in checks_to_run:
         outcome = check.run(snapshot, source_dir=source_dir)
         _print_outcome(outcome)
         all_findings.extend(outcome.findings)

@@ -1,13 +1,25 @@
 """Security checks for mcp-audit.
 
-Each check implements `mcp_audit.checks.base.Check` and is registered in
+Each check implements `mcp_audit.checks.base.Check`. Stateless checks (ones
+that only need the snapshot itself) are pre-instantiated and registered in
 `ALL_CHECKS` below so `mcp-audit scan` can discover and run all of them
 without the CLI needing to know about each one individually.
+
+`RugPullCheck` is the one exception: it needs a server-id resolved from CLI
+input (and optionally an `--update-baseline` flag) before it can be
+constructed, so it is instantiated per-invocation by `mcp_audit.cli.scan`
+instead of living in `ALL_CHECKS`. It's still exported from this package so
+the CLI doesn't need to import from the submodule directly.
 """
 
 from __future__ import annotations
 
 from mcp_audit.checks.base import Check, CheckOutcome, Finding, Severity
+from mcp_audit.checks.rug_pull import (
+    DEFAULT_BASELINE_DIR,
+    RugPullCheck,
+    compute_default_server_id,
+)
 from mcp_audit.checks.secrets import SecretsCheck
 from mcp_audit.checks.transport import TransportCheck
 from mcp_audit.checks.unicode_concealment import UnicodeConcealmentCheck
@@ -24,4 +36,7 @@ __all__ = [
     "Finding",
     "Severity",
     "ALL_CHECKS",
+    "RugPullCheck",
+    "compute_default_server_id",
+    "DEFAULT_BASELINE_DIR",
 ]

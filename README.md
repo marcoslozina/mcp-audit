@@ -39,6 +39,39 @@ uv run mcp-audit inspect -- python examples/toy_server.py
 This should print the toy server's `add`, `get_weather`, and `reverse_text`
 tools, along with its one example resource and prompt.
 
+## Rug-pull detection
+
+`mcp-audit scan` compares the target server's tool definitions (name,
+description, input schema) against a saved baseline from a previous scan,
+to catch a server changing what a tool does *after* a user has already
+approved it — e.g. a "read a file" tool quietly gaining delete behavior, or
+a description subtly edited to inject instructions.
+
+Baselines are stored per-server as JSON under `~/.mcp-audit/baselines/`
+(home directory, not project-local, so they survive you running `mcp-audit`
+from wherever). Each server is identified by a `--server-id` you choose, or,
+if you don't pass one, a hash of the literal launch command — pass an
+explicit `--server-id` if the command/args might change across runs of the
+same logical server.
+
+```bash
+# First run: no baseline yet, one is created, nothing to compare.
+uv run mcp-audit scan --server-id my-server -- python path/to/target_server.py
+
+# Later runs: compared against the saved baseline. Tool description/schema
+# changes are reported as HIGH findings; new tools as MEDIUM (informational);
+# removed tools as LOW (informational).
+uv run mcp-audit scan --server-id my-server -- python path/to/target_server.py
+
+# After reviewing a flagged change and confirming it's legitimate, accept it
+# as the new baseline instead of getting flagged again next time:
+uv run mcp-audit scan --server-id my-server --update-baseline -- python path/to/target_server.py
+```
+
+Only tools are fingerprinted today — resources and prompts can drift too in
+principle, but tools are MCP's actual invocation surface, so that's where v1
+focuses.
+
 ## Requirements
 
 - Python 3.11+
