@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.table import Table
 
 from mcp_audit.checks import ALL_CHECKS, CheckOutcome, Finding, RugPullCheck, compute_default_server_id
-from mcp_audit.parser import ServerSnapshot, inspect_server_sync
+from mcp_audit.parser import ServerSnapshot, inspect_target_sync
 
 _SEVERITY_ORDER = ["critical", "high", "medium", "low"]
 
@@ -92,6 +92,7 @@ def _warn_misplaced_flags(args: list[str]) -> None:
 
 def _print_snapshot(snapshot: ServerSnapshot) -> None:
     click.echo(f"Server: {snapshot.server_name} (version {snapshot.server_version or 'unknown'})")
+    click.echo(f"Transport: {snapshot.transport}" + (f" ({snapshot.endpoint_url})" if snapshot.endpoint_url else ""))
     click.echo(f"Protocol version: {snapshot.protocol_version}")
     click.echo()
 
@@ -130,23 +131,27 @@ def main() -> None:
 @main.command()
 @click.argument("server_command", nargs=-1, required=True)
 def inspect(server_command: tuple[str, ...]) -> None:
-    """Connect to a target MCP server over stdio and print its tools/resources/prompts.
+    """Connect to a target MCP server and print its tools/resources/prompts.
 
-    Pass the command to launch the target server after `--`, e.g.:
+    Pass the command to launch a local (stdio) target server after `--`:
 
         mcp-audit inspect -- python examples/toy_server.py
+
+    Or pass a single http:// or https:// URL to connect to a remote server
+    over Streamable HTTP instead — detected automatically, no extra flag
+    needed:
+
+        mcp-audit inspect -- https://example.com/mcp
     """
     command_parts = list(server_command)
     if not command_parts:
         click.echo("error: no server command given", err=True)
         sys.exit(1)
 
-    command, *args = command_parts
-
     try:
-        snapshot = inspect_server_sync(command, args)
+        snapshot = inspect_target_sync(command_parts)
     except FileNotFoundError:
-        click.echo(f"error: command not found: {command}", err=True)
+        click.echo(f"error: command not found: {command_parts[0]}", err=True)
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001 - surface any handshake/transport failure to the user
         click.echo(f"error: failed to inspect server: {exc}", err=True)
@@ -218,8 +223,7 @@ def _build_error_report(message: str) -> dict:
 
 
 def _run_scan_report(
-    command: str,
-    args: list[str],
+    command_parts: list[str],
     source_dir: Path | None,
     server_id: str | None,
     update_baseline: bool,
@@ -232,19 +236,24 @@ def _run_scan_report(
     difference between the two commands is what they do with the returned
     report (print it in full vs. reduce it to a badge payload).
 
+    `command_parts` is either `[executable, *args]` for a stdio target, or a
+    single-element list holding an http(s) URL for a remote target — see
+    `mcp_audit.parser.inspect_target` for the dispatch logic.
+
     On a handshake/connection failure (target command not found, protocol
-    mismatch, etc.) this returns an error-shaped report (see
-    `_build_error_report`, identifiable by an `"error"` key) instead of
-    raising — callers decide how to present that failure.
+    mismatch, remote endpoint requiring auth this scan didn't send, etc.)
+    this returns an error-shaped report (see `_build_error_report`,
+    identifiable by an `"error"` key) instead of raising — callers decide
+    how to present that failure.
     """
     try:
-        snapshot = inspect_server_sync(command, args)
+        snapshot = inspect_target_sync(command_parts)
     except FileNotFoundError:
-        return _build_error_report(f"command not found: {command}")
+        return _build_error_report(f"command not found: {command_parts[0]}")
     except Exception as exc:  # noqa: BLE001 - surface any handshake/transport failure to the caller
         return _build_error_report(f"failed to inspect server: {exc}")
 
-    resolved_server_id = server_id or compute_default_server_id(command, args)
+    resolved_server_id = server_id or compute_default_server_id(command_parts[0], command_parts[1:])
 
     rug_pull_check = RugPullCheck(server_id=resolved_server_id, update_baseline=update_baseline)
     checks_to_run: list = [*ALL_CHECKS, rug_pull_check]
@@ -425,7 +434,7 @@ def scan(
 ) -> None:
     """Connect to a target MCP server, run all security checks, and print a report.
 
-    Pass the command to launch the target server after `--`, e.g.:
+    Pass the command to launch a local (stdio) target server after `--`:
 
         mcp-audit scan -- python examples/toy_server.py
 
@@ -434,6 +443,20 @@ def scan(
         mcp-audit scan --server-id my-toy-server -- python examples/toy_server.py
 
         mcp-audit scan --server-id my-toy-server --update-baseline -- python examples/toy_server.py
+
+    Or pass a single http:// or https:// URL to scan a remote server over
+    Streamable HTTP instead — detected automatically from the URL, no extra
+    flag needed. This is also what unlocks the `transport-security` and
+    `unauthenticated-discovery` checks, which report `not_applicable`
+    against a stdio target:
+
+        mcp-audit scan -- https://example.com/mcp
+
+    mcp-audit sends no auth headers of any kind when connecting to a URL
+    target — if the server requires auth, the handshake itself will fail
+    and the scan reports a connection error rather than findings (see
+    `unauthenticated-discovery` for why that's actually the expected,
+    "your server is fine" outcome).
 
     IMPORTANT: mcp-audit's own options (--source-dir, --server-id,
     --update-baseline, --format) must go BEFORE --. Anything after -- is
@@ -448,10 +471,9 @@ def scan(
         click.echo("error: no server command given", err=True)
         sys.exit(1)
 
-    command, *args = command_parts
-    _warn_misplaced_flags(args)
+    _warn_misplaced_flags(command_parts[1:])
 
-    report = _run_scan_report(command, args, source_dir, server_id, update_baseline)
+    report = _run_scan_report(command_parts, source_dir, server_id, update_baseline)
 
     if "error" in report:
         _emit_scan_error(report, output_format)
@@ -500,9 +522,11 @@ def badge(
     "endpoint badge" JSON payload instead of a full report.
 
     Pass the command to launch the target server after `--`, exactly like
-    `scan`, e.g.:
+    `scan` — a stdio command, or a single http(s) URL for a remote target:
 
         mcp-audit badge -- python examples/toy_server.py
+
+        mcp-audit badge -- https://example.com/mcp
 
     Intended use: run this in CI, save stdout to a file, and publish that
     file somewhere shields.io's endpoint badge can fetch it (a GitHub Gist
@@ -525,10 +549,9 @@ def badge(
         click.echo("error: no server command given", err=True)
         sys.exit(1)
 
-    command, *args = command_parts
-    _warn_misplaced_flags(args)
+    _warn_misplaced_flags(command_parts[1:])
 
-    report = _run_scan_report(command, args, source_dir, server_id, update_baseline)
+    report = _run_scan_report(command_parts, source_dir, server_id, update_baseline)
     click.echo(json.dumps(_build_badge(report)))
     sys.exit(report["exit_code"])
 

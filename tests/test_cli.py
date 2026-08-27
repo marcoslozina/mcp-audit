@@ -34,6 +34,14 @@ def _run_cli(args: list[str], baseline_dir: Path) -> subprocess.CompletedProcess
     )
 
 
+def test_inspect_http_server_url_target(tmp_path: Path, toy_http_server_url: str) -> None:
+    result = _run_cli(["inspect", "--", toy_http_server_url], baseline_dir=tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Transport: http" in result.stdout
+    assert "add:" in result.stdout
+
+
 def test_scan_toy_server_exits_zero(tmp_path: Path) -> None:
     result = _run_cli(["scan", "--", sys.executable, "examples/toy_server.py"], baseline_dir=tmp_path)
 
@@ -74,3 +82,49 @@ def test_scan_format_json_on_evil_server_reports_findings(tmp_path: Path) -> Non
 
     critical_findings = [f for f in report["findings"] if f["severity"] == "critical"]
     assert any(f["check_id"] == "unicode-concealment" for f in critical_findings)
+
+
+def test_scan_plaintext_http_server_reports_transport_and_auth_findings(
+    tmp_path: Path, toy_http_server_url: str
+) -> None:
+    """Real end-to-end HTTP scan (see conftest.toy_http_server_url — a real
+    subprocess, no mocking): a target given as a URL after `--` is detected
+    automatically and connected to over Streamable HTTP, and both
+    HTTP-only checks (transport-security, unauthenticated-discovery) run
+    for real instead of reporting not_applicable.
+    """
+    result = _run_cli(
+        ["scan", "--format", "json", "--", toy_http_server_url],
+        baseline_dir=tmp_path,
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["server"]["transport"] == "http"
+
+    high_findings = [f for f in report["findings"] if f["severity"] == "high"]
+    check_ids = {f["check_id"] for f in high_findings}
+    assert "transport-security" in check_ids
+    assert "unauthenticated-discovery" in check_ids
+
+    checks_by_id = {c["check_id"]: c for c in report["checks"]}
+    assert checks_by_id["transport-security"]["status"] == "ran"
+    assert checks_by_id["unauthenticated-discovery"]["status"] == "ran"
+
+
+def test_scan_authed_http_server_without_credentials_fails_the_handshake(
+    tmp_path: Path, toy_http_server_authed_url: str
+) -> None:
+    """mcp-audit sends no auth headers on a URL target. Against a server
+    that correctly requires auth, the whole handshake fails — a structured
+    connection-error report, not a false "no findings" pass and not a
+    spurious unauthenticated-discovery finding (there's no snapshot for
+    that check to run against)."""
+    result = _run_cli(
+        ["scan", "--format", "json", "--", toy_http_server_authed_url],
+        baseline_dir=tmp_path,
+    )
+
+    assert result.returncode == 1
+    report = json.loads(result.stdout)
+    assert "error" in report

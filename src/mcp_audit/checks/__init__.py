@@ -28,6 +28,7 @@ from mcp_audit.checks.rug_pull import (
 from mcp_audit.checks.secrets import SecretsCheck
 from mcp_audit.checks.tool_poisoning import ToolPoisoningCheck
 from mcp_audit.checks.transport import TransportCheck
+from mcp_audit.checks.unauthenticated_discovery import UnauthenticatedDiscoveryCheck
 from mcp_audit.checks.unicode_concealment import UnicodeConcealmentCheck
 
 ALL_CHECKS: list[Check] = [
@@ -40,6 +41,7 @@ ALL_CHECKS: list[Check] = [
     OverprivilegedScopesCheck(),
     ResourceLimitsCheck(),
     TransportCheck(),
+    UnauthenticatedDiscoveryCheck(),
 ]
 
 __all__ = [
