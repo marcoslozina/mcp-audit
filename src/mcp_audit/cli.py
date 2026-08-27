@@ -1,22 +1,83 @@
 """mcp-audit command-line interface.
 
-Currently exposes a single command: `inspect`, which connects to a target
-MCP server over stdio and prints the tools/resources/prompts it exposes.
-Security checks (tool poisoning, secrets, TLS, etc.) are NOT implemented
-yet — this is the parsing foundation they will build on.
+Exposes two commands:
+  - `inspect`: connects to a target MCP server over stdio and prints the
+    tools/resources/prompts it exposes (parsing foundation, no checks).
+  - `scan`: runs all security checks against a target server and prints a
+    report, human-readable (default, via `rich`) or machine-readable
+    (`--format json`, for CI/CD gating).
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 import click
+from rich.console import Console
+from rich.table import Table
 
 from mcp_audit.checks import ALL_CHECKS, CheckOutcome, Finding, RugPullCheck, compute_default_server_id
 from mcp_audit.parser import ServerSnapshot, inspect_server_sync
 
 _SEVERITY_ORDER = ["critical", "high", "medium", "low"]
+
+# Severity -> rich style, per the product's "transparency of coverage" bar:
+# critical/high need to read as urgent, medium as a caution, low/info as
+# background noise you can skim past.
+_SEVERITY_STYLE = {
+    "critical": "bold red",
+    "high": "red",
+    "medium": "yellow",
+    "low": "grey62",
+}
+
+_STATUS_STYLE = {
+    "ran": "green",
+    "skipped": "yellow",
+    "not_applicable": "grey62",
+}
+
+# Long options that belong to `mcp-audit scan` itself. If one of these shows
+# up *inside* the target server's launch command (i.e. after `--`), the user
+# almost certainly meant to pass it to mcp-audit and put it in the wrong
+# place — Click has no way to reject it (everything after `--` is legally
+# the server's argv), so we detect it heuristically and warn instead of
+# silently doing nothing. See README "Flag order" section.
+_MCPAUDIT_OWN_FLAGS = {"--source-dir", "--server-id", "--update-baseline", "--format"}
+
+
+def _warn_misplaced_flags(args: list[str]) -> None:
+    """Warn if an mcp-audit option was placed after `--` (server-side argv).
+
+    This can't be a hard error: a target server could legitimately accept an
+    argument that happens to collide with one of our flag names. So we warn
+    loudly on stderr and keep going — the scan still runs (against whatever
+    server command the user actually gave us), it just won't have applied
+    the option the user probably intended.
+    """
+    misplaced = sorted({arg.split("=", 1)[0] for arg in args if arg.split("=", 1)[0] in _MCPAUDIT_OWN_FLAGS})
+    if not misplaced:
+        return
+
+    console = Console(stderr=True)
+    flags_str = ", ".join(misplaced)
+    console.print(
+        f"\n[bold yellow]⚠  Warning:[/bold yellow] {flags_str} appears after "
+        "[bold]--[/bold] in your command.",
+        highlight=False,
+    )
+    console.print(
+        "   Everything after -- is passed literally to the target server, not to "
+        "mcp-audit — so this option was [bold]not applied[/bold].",
+        highlight=False,
+    )
+    console.print(
+        "   Put mcp-audit's own options [bold]before[/bold] --, e.g.:\n"
+        f"     mcp-audit scan {flags_str} -- <server command>\n",
+        highlight=False,
+    )
 
 
 def _print_snapshot(snapshot: ServerSnapshot) -> None:
@@ -53,7 +114,7 @@ def _print_snapshot(snapshot: ServerSnapshot) -> None:
 @click.group()
 @click.version_option()
 def main() -> None:
-    """mcp-audit: security scanner for MCP servers (early MVP — parsing foundation only)."""
+    """mcp-audit: security scanner for MCP servers."""
 
 
 @main.command()
@@ -84,39 +145,112 @@ def inspect(server_command: tuple[str, ...]) -> None:
     _print_snapshot(snapshot)
 
 
-def _print_outcome(outcome: CheckOutcome) -> None:
-    if outcome.status == "ran":
-        status_label = "RAN"
-    elif outcome.status == "not_applicable":
-        status_label = "NOT APPLICABLE"
-    else:
-        status_label = "SKIPPED"
-
-    click.echo(f"[{status_label}] {outcome.name} ({outcome.check_id})")
-    if outcome.reason:
-        click.echo(f"    reason: {outcome.reason}")
-    if outcome.status == "ran" and not outcome.findings:
-        click.echo("    no findings")
+def _outcome_to_dict(outcome: CheckOutcome) -> dict:
+    return {
+        "check_id": outcome.check_id,
+        "name": outcome.name,
+        "status": outcome.status,
+        "reason": outcome.reason,
+        "finding_count": len(outcome.findings),
+    }
 
 
-def _print_findings_by_severity(findings: list[Finding]) -> None:
-    by_severity: dict[str, list[Finding]] = {sev: [] for sev in _SEVERITY_ORDER}
-    for finding in findings:
-        by_severity.setdefault(finding.severity, []).append(finding)
+def _finding_to_dict(finding: Finding) -> dict:
+    return {
+        "severity": finding.severity,
+        "check_id": finding.check_id,
+        "title": finding.title,
+        "description": finding.description,
+        "location": finding.location,
+    }
 
+
+def _build_report(
+    snapshot: ServerSnapshot,
+    server_id: str,
+    server_id_was_explicit: bool,
+    outcomes: list[CheckOutcome],
+) -> dict:
+    all_findings = [f for outcome in outcomes for f in outcome.findings]
+    summary = {sev: sum(1 for f in all_findings if f.severity == sev) for sev in _SEVERITY_ORDER}
+    summary["total"] = len(all_findings)
+    gating_count = summary["critical"] + summary["high"]
+
+    return {
+        "server": {
+            "name": snapshot.server_name,
+            "version": snapshot.server_version,
+            "protocol_version": snapshot.protocol_version,
+            "transport": snapshot.transport,
+        },
+        "server_id": server_id,
+        "server_id_explicit": server_id_was_explicit,
+        "checks": [_outcome_to_dict(o) for o in outcomes],
+        "findings": [_finding_to_dict(f) for f in all_findings],
+        "summary": summary,
+        "exit_code": 1 if gating_count else 0,
+    }
+
+
+def _print_report_json(report: dict) -> None:
+    click.echo(json.dumps(report, indent=2))
+
+
+def _print_report_human(report: dict) -> None:
+    console = Console()
+    server = report["server"]
+
+    console.print(f"[bold]Server:[/bold] {server['name']} (version {server['version'] or 'unknown'})")
+    console.print(f"[bold]Transport:[/bold] {server['transport']}")
+    server_id_note = (
+        "" if report["server_id_explicit"] else " [grey62](auto-derived from launch command; pass --server-id to pin it)[/grey62]"
+    )
+    console.print(f"[bold]Server ID[/bold] (rug-pull baseline key): {report['server_id']}{server_id_note}")
+    console.print()
+
+    findings = report["findings"]
     if not findings:
-        click.echo("No findings.")
-        return
+        console.print("[bold green]No findings.[/bold green]\n")
+    else:
+        for severity in _SEVERITY_ORDER:
+            sev_findings = [f for f in findings if f["severity"] == severity]
+            if not sev_findings:
+                continue
+            style = _SEVERITY_STYLE[severity]
+            console.print(f"[{style}]{severity.upper()} ({len(sev_findings)})[/{style}]")
+            for finding in sev_findings:
+                console.print(f"  [{style}]• [{finding['check_id']}] {finding['title']}[/{style}]")
+                console.print(f"    location: {finding['location']}")
+                console.print(f"    {finding['description']}")
+            console.print()
 
-    for severity in _SEVERITY_ORDER:
-        sev_findings = by_severity.get(severity, [])
-        if not sev_findings:
-            continue
-        click.echo(f"\n{severity.upper()} ({len(sev_findings)}):")
-        for finding in sev_findings:
-            click.echo(f"  - [{finding.check_id}] {finding.title}")
-            click.echo(f"    location: {finding.location}")
-            click.echo(f"    {finding.description}")
+    # Coverage table at the end, on purpose: "what did we actually check"
+    # is this product's transparency pitch, and it belongs where a reader
+    # ends up, not buried above the findings they came here for.
+    table = Table(title="Check coverage", show_lines=False)
+    table.add_column("Check")
+    table.add_column("Status")
+    table.add_column("Detail")
+    for check in report["checks"]:
+        style = _STATUS_STYLE.get(check["status"], "")
+        status_label = check["status"].replace("_", " ").upper()
+        detail = check["reason"] or ("no findings" if check["finding_count"] == 0 else f"{check['finding_count']} finding(s)")
+        table.add_row(f"{check['name']} ({check['check_id']})", f"[{style}]{status_label}[/{style}]", detail)
+    console.print(table)
+
+    summary = report["summary"]
+    gating = summary["critical"] + summary["high"]
+    console.print()
+    if gating:
+        console.print(
+            f"[bold red]FAIL[/bold red]: {gating} critical/high finding(s) "
+            f"({summary['critical']} critical, {summary['high']} high)."
+        )
+    else:
+        console.print(
+            "[bold green]PASS[/bold green]: no critical/high findings "
+            f"({summary['medium']} medium, {summary['low']} low)."
+        )
 
 
 @main.command()
@@ -145,11 +279,19 @@ def _print_findings_by_severity(findings: list[Finding]) -> None:
         "of comparing against it. Use after confirming a detected change is legitimate."
     ),
 )
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["human", "json"]),
+    default="human",
+    help="Output format. 'json' is structured for CI/CD consumption; 'human' (default) is for terminals.",
+)
 def scan(
     server_command: tuple[str, ...],
     source_dir: Path | None,
     server_id: str | None,
     update_baseline: bool,
+    output_format: str,
 ) -> None:
     """Connect to a target MCP server, run all security checks, and print a report.
 
@@ -162,6 +304,14 @@ def scan(
         mcp-audit scan --server-id my-toy-server -- python examples/toy_server.py
 
         mcp-audit scan --server-id my-toy-server --update-baseline -- python examples/toy_server.py
+
+    IMPORTANT: mcp-audit's own options (--source-dir, --server-id,
+    --update-baseline, --format) must go BEFORE --. Anything after -- is
+    passed literally to the target server's argv, including flags that
+    happen to share a name with one of ours.
+
+    Exit code is 1 if any critical/high finding was reported (suitable as
+    a CI gate), 0 otherwise.
     """
     command_parts = list(server_command)
     if not command_parts:
@@ -169,6 +319,7 @@ def scan(
         sys.exit(1)
 
     command, *args = command_parts
+    _warn_misplaced_flags(args)
 
     try:
         snapshot = inspect_server_sync(command, args)
@@ -181,31 +332,18 @@ def scan(
 
     resolved_server_id = server_id or compute_default_server_id(command, args)
 
-    click.echo(f"Server: {snapshot.server_name} (version {snapshot.server_version or 'unknown'})")
-    click.echo(f"Transport: {snapshot.transport}")
-    click.echo(
-        f"Server ID (rug-pull baseline key): {resolved_server_id}"
-        + ("" if server_id else " (auto-derived from launch command; pass --server-id to pin it)")
-    )
-    click.echo()
-
     rug_pull_check = RugPullCheck(server_id=resolved_server_id, update_baseline=update_baseline)
     checks_to_run: list = [*ALL_CHECKS, rug_pull_check]
 
-    click.echo("Checks:")
-    all_findings: list[Finding] = []
-    for check in checks_to_run:
-        outcome = check.run(snapshot, source_dir=source_dir)
-        _print_outcome(outcome)
-        all_findings.extend(outcome.findings)
-    click.echo()
+    outcomes: list[CheckOutcome] = [check.run(snapshot, source_dir=source_dir) for check in checks_to_run]
+    report = _build_report(snapshot, resolved_server_id, server_id is not None, outcomes)
 
-    click.echo("Findings:")
-    _print_findings_by_severity(all_findings)
+    if output_format == "json":
+        _print_report_json(report)
+    else:
+        _print_report_human(report)
 
-    critical_count = sum(1 for f in all_findings if f.severity == "critical")
-    if critical_count:
-        sys.exit(1)
+    sys.exit(report["exit_code"])
 
 
 if __name__ == "__main__":

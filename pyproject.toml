@@ -3,6 +3,7 @@ name = "mcp-audit"
 version = "0.1.0"
 description = "Open-source security scanner for MCP (Model Context Protocol) servers."
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Marcos Lozina", email = "marcoslozina@gmail.com" }
 ]
@@ -10,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "click>=8.5.0",
     "mcp>=2.1.1",
+    "rich>=13.7.0",
 ]
 
 [project.scripts]
