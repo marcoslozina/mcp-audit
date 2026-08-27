@@ -5,6 +5,8 @@
 ![Status: early MVP](https://img.shields.io/badge/status-early%20MVP-yellow.svg)
 [![tests](https://github.com/marcoslozina/mcp-audit/actions/workflows/tests.yml/badge.svg)](https://github.com/marcoslozina/mcp-audit/actions/workflows/tests.yml)
 [![smoke test](https://github.com/marcoslozina/mcp-audit/actions/workflows/smoke-test.yml/badge.svg)](https://github.com/marcoslozina/mcp-audit/actions/workflows/smoke-test.yml)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://github.com/pre-commit/pre-commit)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
 **Detect what other MCP scanners miss.**
 
@@ -359,9 +361,17 @@ here, open an issue.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to set up the dev
 environment, run the test/lint/type-check suite locally, the commit-message
-convention, and how to implement and register a new security check.
+convention, and how to implement and register a new security check. This
+project also follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
 
-## Roadmap & sustainability
+## Security
+
+Found a vulnerability *in* `mcp-audit` itself (not just a check missing an
+attack class — that's a normal issue, see [Contributing](#contributing)
+above)? See [`SECURITY.md`](SECURITY.md) for how to report it privately via
+GitHub Security Advisories.
+
+## Sustainability
 
 The CLI is MIT-licensed and stays that way — every check, the report
 format, the coverage table, all of it. That's not going to change to fund

@@ -9,6 +9,8 @@ If you're an AI coding agent working in this repo, read
 attribute naming, docstring vs. f-string pitfalls, flag-ordering rules) that
 this file doesn't repeat.
 
+Participation is governed by the [Contributor Covenant](CODE_OF_CONDUCT.md).
+
 ## Setting up the environment
 
 ```bash
@@ -18,8 +20,10 @@ uv sync
 ```
 
 `uv sync` reads `pyproject.toml` and `uv.lock` and creates a `.venv` with
-every runtime and dev dependency (`pytest`, `pytest-asyncio`, `ruff`,
-`mypy`). There's no separate bootstrap step.
+every runtime and dev dependency (`pytest`, `pytest-asyncio`, `mypy`,
+`pre-commit`). There's no separate bootstrap step. `ruff` is not a project
+dependency — it's run via `uvx ruff` (see "Lint" below), an ephemeral tool
+invocation rather than something `uv sync` installs into `.venv`.
 
 Run the CLI itself via `uv run`, never a bare `mcp-audit` unless you've
 activated the venv:
@@ -27,6 +31,29 @@ activated the venv:
 ```bash
 uv run mcp-audit scan -- python examples/toy_server.py
 ```
+
+## Set up the local pre-commit hooks
+
+This repo ships a `.pre-commit-config.yaml` (ruff lint + format check, mypy,
+and a gitleaks secret scan on every commit; the full pytest suite on every
+push) so mistakes get caught on your machine, before they ever reach CI.
+Activate it once per checkout:
+
+```bash
+uv run pre-commit install                       # runs ruff/mypy/gitleaks on every `git commit`
+uv run pre-commit install --hook-type pre-push   # runs `uv run pytest` on every `git push`
+```
+
+To check the whole repo on demand (e.g. before opening a PR, or after
+pulling changes made before you installed the hooks):
+
+```bash
+uv run pre-commit run --all-files
+```
+
+If a hook fails, fix what it found — don't skip it with `git commit
+--no-verify` or `git push --no-verify` except in a genuine emergency, and
+say so in the PR if you do.
 
 ## Running the checks locally
 
@@ -145,13 +172,17 @@ Steps:
 
 ## CI expectations
 
-Every PR runs three GitHub Actions workflows:
+Every PR runs three layers of automated checks:
 
 - **`tests.yml`** — `uvx ruff check .`, `uv run mypy src/`, and
   `uv run pytest -v`.
 - **`smoke-test.yml`** — runs the real CLI against `examples/toy_server.py`
   (must exit `0`, clean) and `examples/evil_server.py` (must exit `1`,
   caught) as an end-to-end sanity check independent of the pytest suite.
+- **CodeQL** — static analysis for the repo's own code, run via GitHub's
+  default code-scanning setup (repo Settings, not a committed workflow
+  file — that's why you won't find a third `.yml` under
+  `.github/workflows/`).
 
 A PR needs all of these green before it's merged. If you touch
 `checks/rug_pull.py`, double-check the test suite still never reads or

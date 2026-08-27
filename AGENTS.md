@@ -19,8 +19,14 @@ uv sync
 ```
 
 That's it — `uv` reads `pyproject.toml` and `uv.lock` and creates `.venv`.
-There's no separate lint/format/test bootstrap step yet (see "Testing" below
-for what "tests" means at this stage).
+
+Optionally (but see "Mandatory: run pre-commit yourself before proposing any
+commit" below for why this doesn't replace anything):
+
+```bash
+uv run pre-commit install
+uv run pre-commit install --hook-type pre-push
+```
 
 ## Running the CLI
 
@@ -132,20 +138,11 @@ product requirement, not a technicality — see the docstring in `base.py`:
   all (e.g. transport-security checks against a stdio-only connection).
   This is **not** the same as "passed" — nothing was verified either way.
 
-To add a new check:
-
-1. Create `src/mcp_audit/checks/your_check.py`, implement `Check`, return
-   `Finding`s (see `Finding` dataclass in `base.py`: `severity`, `check_id`,
-   `title`, `description`, `location`) plus an honest `CheckOutcome`.
-2. Register it in `src/mcp_audit/checks/__init__.py`:
-   - If it's stateless (only needs the `ServerSnapshot`), instantiate it and
-     add it to the `ALL_CHECKS` list.
-   - If it needs CLI-provided state before construction (like `RugPullCheck`
-     needing a resolved `server_id`), instantiate it per-invocation in
-     `cli.py`'s `scan` command instead, the way `RugPullCheck` is handled.
-3. Severity guidance: `critical`/`high` findings gate CI (`scan` exits 1);
-   `medium`/`low` don't. Pick accordingly — don't mark something `critical`
-   just to make sure it's noticed if it's genuinely informational.
+For the full step-by-step (where to register it, stateless vs. stateful
+checks, severity guidance, test file conventions, when to bump
+`_SCHEMA_VERSION`), see CONTRIBUTING.md's ["Adding a new security
+check"](CONTRIBUTING.md#adding-a-new-security-check) — kept in one place so
+the two files don't drift out of sync with each other.
 
 ## JSON output contract (`scan --format json`)
 
@@ -172,6 +169,35 @@ unconditionally. See `_fail_scan` in `cli.py`.
   project rule — not a style preference. Commit messages describe the
   change; they don't describe the tooling that helped write it.
 
+## Mandatory: run pre-commit yourself before proposing any commit
+
+This repo has a `.pre-commit-config.yaml` (ruff lint + format check, mypy,
+gitleaks secret scan) meant to run as a git hook on every commit, and pytest
+on every push. **Do not assume that hook fired.** A git hook only runs when
+a commit is made through git's own commit machinery on a checkout where
+`pre-commit install` has already been run — neither of those is guaranteed
+to be true for you:
+
+- You may be composing a commit through a mechanism that doesn't go through
+  the local git hook at all.
+- `pre-commit install` is a one-time, per-checkout, local step — a fresh
+  clone or a fresh agent sandbox has the config file (it's committed) but
+  not the installed hook (that part is never committed, by design — see
+  `pre-commit`'s own docs).
+
+So, as an agent, before you hand back a commit as done:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+Run this explicitly, every time, regardless of whether you think the git
+hook already ran. If it fails, fix what it found — don't commit around it,
+and don't pass `--no-verify` to skip it. This is what makes the local
+safety net actually agent-first: it doesn't rely on a human remembering to
+run it, or on a hook silently not being installed — it's a step spelled out
+right here for any agent reading this file.
+
 ## Testing
 
 There is a pytest suite under `tests/`, run via:
@@ -192,6 +218,9 @@ uv run pytest -v
 - `tests/test_cli.py` — end-to-end tests that invoke the CLI as a real
   subprocess (`python -m mcp_audit.cli ...`) against `toy_server.py` and
   `evil_server.py`, including `--format json` output validity.
+- `tests/test_badge.py` — same subprocess approach, for the `badge` command:
+  asserts the shields.io endpoint-badge JSON shape and colors for a clean
+  scan (`brightgreen`/`passing`) and a caught one (`red`/`critical/high`).
 
 **Test isolation for the rug-pull baseline**: `RugPullCheck` stores baselines
 under `~/.mcp-audit/baselines` by default (see `checks/rug_pull.py`). Any
