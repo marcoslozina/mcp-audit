@@ -176,9 +176,7 @@ class RugPullCheck(Check):
     def _baseline_path(self) -> Path:
         return self.baseline_dir / f"{self.server_id}.json"
 
-    def _write_baseline(
-        self, path: Path, snapshot: ServerSnapshot, tools: list[_ToolFingerprint]
-    ) -> None:
+    def _write_baseline(self, path: Path, snapshot: ServerSnapshot, tools: list[_ToolFingerprint]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         now = datetime.now(UTC).isoformat()
         created_at = now
@@ -251,9 +249,7 @@ class RugPullCheck(Check):
             findings=findings,
         )
 
-    def _diff(
-        self, previous: list[_ToolFingerprint], current: list[_ToolFingerprint]
-    ) -> list[Finding]:
+    def _diff(self, previous: list[_ToolFingerprint], current: list[_ToolFingerprint]) -> list[Finding]:
         findings: list[Finding] = []
         previous_by_name = {t.name: t for t in previous}
         current_by_name = {t.name: t for t in current}
@@ -278,17 +274,13 @@ class RugPullCheck(Check):
                 continue
 
             desc_changed = prev.description != curr.description
-            schema_changed = _canonical_schema(prev.input_schema) != _canonical_schema(
-                curr.input_schema
-            )
+            schema_changed = _canonical_schema(prev.input_schema) != _canonical_schema(curr.input_schema)
             if not (desc_changed or schema_changed):
                 continue
 
             change_notes: list[str] = []
             if desc_changed:
-                change_notes.append(
-                    f"description changed from {prev.description!r} to {curr.description!r}"
-                )
+                change_notes.append(f"description changed from {prev.description!r} to {curr.description!r}")
             if schema_changed:
                 change_notes.append(
                     "input_schema changed from "

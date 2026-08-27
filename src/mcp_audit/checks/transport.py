@@ -75,10 +75,7 @@ class TransportCheck(Check):
                     severity="medium",
                     check_id=self.check_id,
                     title="No auth mechanism declared",
-                    description=(
-                        "The server did not declare an authentication mechanism "
-                        "for its remote transport."
-                    ),
+                    description=("The server did not declare an authentication mechanism for its remote transport."),
                     location=snapshot.server_name,
                 )
             )

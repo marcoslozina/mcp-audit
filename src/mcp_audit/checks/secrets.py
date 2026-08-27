@@ -37,7 +37,17 @@ CHECK_ID = "secrets-hardcoded"
 
 _SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache", ".pytest_cache"}
 _SCAN_SUFFIXES = {
-    ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".env", ".txt",
+    ".py",
+    ".js",
+    ".ts",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".cfg",
+    ".ini",
+    ".env",
+    ".txt",
 }
 
 
@@ -50,16 +60,14 @@ class _VendorPattern:
 
 _VENDOR_PATTERNS: list[_VendorPattern] = [
     _VendorPattern("AWS access key ID", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    _VendorPattern("AWS secret-looking assignment", re.compile(
-        r"(?i)aws_secret_access_key\s*[:=]\s*['\"][A-Za-z0-9/+=]{30,}['\"]"
-    )),
+    _VendorPattern(
+        "AWS secret-looking assignment", re.compile(r"(?i)aws_secret_access_key\s*[:=]\s*['\"][A-Za-z0-9/+=]{30,}['\"]")
+    ),
     _VendorPattern("OpenAI-style API key", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")),
     _VendorPattern("Google API key", re.compile(r"\bAIza[0-9A-Za-z\-_]{35}\b")),
     _VendorPattern("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
     _VendorPattern("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
-    _VendorPattern("Private key block", re.compile(
-        r"-----BEGIN (?:RSA|EC|OPENSSH|DSA|PGP) PRIVATE KEY-----"
-    )),
+    _VendorPattern("Private key block", re.compile(r"-----BEGIN (?:RSA|EC|OPENSSH|DSA|PGP) PRIVATE KEY-----")),
 ]
 
 # variable = "value" / variable: "value", where the variable name looks
@@ -146,9 +154,7 @@ class SecretsCheck(Check):
                             severity=pattern.severity,
                             check_id=self.check_id,
                             title=f"Hardcoded {pattern.name}",
-                            description=(
-                                f"Matched vendor secret pattern '{pattern.name}' in source code."
-                            ),
+                            description=(f"Matched vendor secret pattern '{pattern.name}' in source code."),
                             location=f"{path}:{line_no}",
                         )
                     )

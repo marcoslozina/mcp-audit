@@ -75,8 +75,7 @@ def _warn_misplaced_flags(args: list[str]) -> None:
     console = Console(stderr=True)
     flags_str = ", ".join(misplaced)
     console.print(
-        f"\n[bold yellow]⚠  Warning:[/bold yellow] {flags_str} appears after "
-        "[bold]--[/bold] in your command.",
+        f"\n[bold yellow]⚠  Warning:[/bold yellow] {flags_str} appears after [bold]--[/bold] in your command.",
         highlight=False,
     )
     console.print(
@@ -330,7 +329,9 @@ def _print_report_human(report: dict) -> None:
     console.print(f"[bold]Server:[/bold] {server['name']} (version {server['version'] or 'unknown'})")
     console.print(f"[bold]Transport:[/bold] {server['transport']}")
     server_id_note = (
-        "" if report["server_id_explicit"] else " [grey62](auto-derived from launch command; pass --server-id to pin it)[/grey62]"
+        ""
+        if report["server_id_explicit"]
+        else " [grey62](auto-derived from launch command; pass --server-id to pin it)[/grey62]"
     )
     console.print(f"[bold]Server ID[/bold] (rug-pull baseline key): {report['server_id']}{server_id_note}")
     console.print()
@@ -361,7 +362,9 @@ def _print_report_human(report: dict) -> None:
     for check in report["checks"]:
         style = _STATUS_STYLE.get(check["status"], "")
         status_label = check["status"].replace("_", " ").upper()
-        detail = check["reason"] or ("no findings" if check["finding_count"] == 0 else f"{check['finding_count']} finding(s)")
+        detail = check["reason"] or (
+            "no findings" if check["finding_count"] == 0 else f"{check['finding_count']} finding(s)"
+        )
         table.add_row(f"{check['name']} ({check['check_id']})", f"[{style}]{status_label}[/{style}]", detail)
     console.print(table)
 

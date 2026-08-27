@@ -33,9 +33,7 @@ def test_detects_hardcoded_secret_in_vulnerable_config() -> None:
 def test_clean_source_produces_no_findings(tmp_path: Path) -> None:
     clean_file = tmp_path / "clean_config.py"
     clean_file.write_text(
-        'APP_NAME = "mcp-audit"\n'
-        'DEBUG = False\n'
-        'MAX_RETRIES = 3\n',
+        'APP_NAME = "mcp-audit"\nDEBUG = False\nMAX_RETRIES = 3\n',
         encoding="utf-8",
     )
 
