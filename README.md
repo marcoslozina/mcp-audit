@@ -1053,6 +1053,23 @@ Still ahead:
 - Integration with the official MCP registry (scan-on-publish / scan-on-list)
 - Hosted dashboard: fleet-wide scanning, scheduled re-scans, Slack/email
   alerting on drift (the paid layer of the open-core model)
+- `unicode-concealment`: script/range allowlist mode as a complement to the
+  existing denylist. Today the check flags characters from a curated,
+  known-bad list — the TAG block plus a specific set of invisible/bidi
+  characters. The proposal is to also flag, by default, any character
+  falling outside the Unicode script/range expected for a description's
+  declared language (e.g. ASCII/Latin plus common punctuation for plain
+  English copy) as suspicious. The two approaches are complementary, not
+  redundant: a denylist can only ever catch a concealment technique someone
+  has already found and catalogued, while a script-based allowlist can catch
+  one nobody has documented yet, because it doesn't need to recognize the
+  specific attack in advance — only that the character doesn't belong in the
+  declared language. Honest trade-off to work out before defaulting this on:
+  higher false-positive risk against legitimately multilingual descriptions,
+  non-ASCII proper nouns, and ordinary typographic punctuation (curly
+  quotes, em/en dashes, and the like) — the "expected range" needs a careful
+  definition first, or this becomes noisy enough to ignore. (surfaced via
+  community feedback on r/mcp)
 
 ## Requirements
 

@@ -106,6 +106,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trigger. Documented as a real limitation: this only helps when the
   consuming repo pins the MCP server's version in a versioned file — a
   floating URL or an unpinned `npx -y package` invocation isn't covered.
+- README: new roadmap item under "Still ahead" proposing a script/range
+  allowlist mode for `unicode-concealment`, as a complement to (not a
+  replacement for) its existing denylist of catalogued TAG-block/invisible
+  characters — flagging by default any character outside the Unicode
+  script/range expected for a description's declared language, since an
+  allowlist can catch a concealment technique nobody has documented yet,
+  which a denylist can't by design. Documents the honest trade-off up
+  front: higher false-positive risk against legitimately multilingual
+  descriptions, non-ASCII proper nouns, and normal typographic punctuation,
+  so the "expected range" needs careful definition before defaulting this
+  on. Surfaced via community feedback on r/mcp.
 
 ## [0.1.0] - 2026-08-27
 
