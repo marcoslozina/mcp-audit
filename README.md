@@ -938,6 +938,70 @@ The full example workflow at
 is still here and still supported for anyone who'd rather own every step of
 the YAML directly instead of depending on this (or any) reusable Action.
 
+## Closing the update blind window
+
+`rug-pull-detection` already does the hard part: every `scan` diffs the
+current tool-definition snapshot against the stored baseline, no extra
+setup required. The actual gap isn't the diff logic — it's the trigger. If
+nobody runs `mcp-audit scan` again after an MCP server dependency gets
+bumped, the drift just sits there undetected until someone happens to
+re-scan.
+
+Closing that gap needs no new `mcp-audit` infrastructure — it's the
+existing `rug-pull-detection` check plus the existing [reusable
+Action](#use-the-reusable-mcp-audit-github-action), wired to a CI trigger
+that fires when a server's pinned version actually changes in your own
+repo:
+
+- **Filter on the files that carry the pin** via `paths:` on a
+  `pull_request` trigger — `requirements.txt`, `pyproject.toml`,
+  `package.json`, or a lockfile (`uv.lock`, `package-lock.json`,
+  `poetry.lock`) — so the scan only runs when a version pin actually moved,
+  not on every PR.
+- **Target Dependabot's own PRs specifically**, if that's where your
+  version bumps come from, with
+  `if: github.event.pull_request.user.login == 'dependabot[bot]'` — the
+  syntax GitHub's own docs use to gate a job on a Dependabot-authored PR
+  ([Automating Dependabot with GitHub
+  Actions](https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions)).
+  `github.actor` is not the pattern documented there for this check.
+
+```yaml
+name: mcp-audit rug-pull check on dependency bump
+
+on:
+  pull_request:
+    paths:
+      - 'requirements.txt'
+      - 'pyproject.toml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'uv.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  mcp-audit-scan:
+    # Optional: narrow further to only Dependabot's own PRs.
+    # if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: marcoslozina/mcp-audit@v1
+        with:
+          server-command: 'python path/to/your_server.py'
+          server-id: 'my-mcp-server' # stable id so rug-pull has a baseline to diff against
+```
+
+**Honest limitation**: this only helps if your own repo pins the MCP
+server's version somewhere versioned — a `requirements.txt` line, a
+`package.json` dependency, a lockfile entry. If an agent invokes an MCP
+server through a floating URL or an unpinned `npx -y some-package` with no
+version recorded in git, there's no file for `paths:` to watch, and this
+recipe doesn't cover it — a scheduled or manual re-scan is still the only
+trigger in that case.
+
 ## Add a security badge to your repo
 
 If your server scans clean, `mcp-audit badge` turns that into a shields.io

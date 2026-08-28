@@ -86,6 +86,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before the workflow was removed and the `v1` tag was cut. See the
   README's "Use the reusable mcp-audit GitHub Action" section.
 
+### Documentation
+
+- README: new "Closing the update blind window" section (after "Use the
+  reusable mcp-audit GitHub Action") spelling out the recipe for the actual
+  gap in `rug-pull-detection` raised in post-launch feedback — the
+  diff-against-baseline logic already runs on every scan, but nothing
+  re-triggers a scan when an MCP server's pinned version changes, so drift
+  can sit undetected until someone happens to re-run it. The recipe wires
+  the existing reusable Action (`marcoslozina/mcp-audit@v1`) to a
+  `pull_request` trigger filtered by `paths:` on the files that carry a
+  version pin (`requirements.txt`, `pyproject.toml`, `package.json`,
+  lockfiles), with an optional
+  `if: github.event.pull_request.user.login == 'dependabot[bot]'` guard to
+  target Dependabot's own PRs specifically — that's the exact conditional
+  GitHub's own docs use for this, confirmed before writing it rather than
+  assumed. No new `mcp-audit` code or infrastructure: this is purely two
+  already-shipped pieces (the check and the Action) combined via a CI
+  trigger. Documented as a real limitation: this only helps when the
+  consuming repo pins the MCP server's version in a versioned file — a
+  floating URL or an unpinned `npx -y package` invocation isn't covered.
+
 ## [0.1.0] - 2026-08-27
 
 Initial public release: a CLI that connects to an MCP server over stdio,
