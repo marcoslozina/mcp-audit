@@ -185,6 +185,56 @@ yourself:
   useful confirmation that `mcp-audit` isn't quietly coupled to only the
   toy servers it ships with.
 
+## Why pattern-matching alone isn't enough
+
+Most MCP scanners today — including well-funded ones from major security
+vendors — flag tool descriptions using keyword/pattern rules (YARA and
+similar). That catches obviously coercive language, but it also flags
+completely legitimate API documentation.
+
+Here's a real example. We ran a YARA-based scanner from a major vendor
+against [Context7](https://github.com/upstash/context7), a widely-used MCP
+server that surfaces up-to-date library docs to coding agents:
+
+```
+HIGH — coercive injection detected
+tool: resolve-library-id
+"You MUST call this function before 'Query Documentation' tool..."
+
+HIGH — coercive injection detected
+tool: query-docs
+"IMPORTANT: Do not call this tool more than 3 times per question."
+```
+
+Both are flagged HIGH severity. Both are just... normal API usage
+instructions. A tool telling an agent "call this first" or "don't call
+this more than N times" is the same kind of thing you'd write in any
+SDK's docstring — it's not an attempt to hijack the model, it's the
+author explaining how to use their own tool correctly. A pattern matcher
+tuned to catch imperative language can't tell the difference between
+"the author documenting their API" and "an attacker hijacking the
+agent," because the surface language looks the same.
+
+We ran `mcp-audit` against the same server:
+
+```
+$ uv run mcp-audit scan -- <context7 server command>
+
+0 findings.
+```
+
+`mcp-audit` doesn't look for coercive-sounding words. It looks for the
+actual mechanisms an attack needs: content that's invisible to a human
+reviewer but readable by the model's tokenizer (Unicode TAG-block
+concealment), tool definitions that change after approval (rug-pulls),
+plaintext transport, unauthenticated discovery, and hardcoded secrets in
+source. Context7's tool descriptions are just documentation — so it
+correctly reports nothing, instead of drowning a real security team in
+noise they'll learn to ignore.
+
+If your team is triaging false positives from a scanner today, that
+triage fatigue is exactly the failure mode this project exists to avoid.
+
 ## Catching a real finding in a published MCP security-training lab
 
 The two servers above scan clean, which is the right result — they're
